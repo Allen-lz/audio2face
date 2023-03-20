@@ -1,3 +1,10 @@
+"""
+这个就是语音处理
+wav ---> 频谱
+
+
+所以可以将这个改成生成数据的
+"""
 import os
 import pickle
 import numpy as np
@@ -15,19 +22,47 @@ def butter_highpass(cutoff, fs, order=5):
     return b, a
     
     
-def pySTFT(x, fft_length=1024, hop_length=256):
-    
+def pySTFT(x, fft_length=1024, hop_length=256, fps=25, sample_rate=16000):
+    """
+    这里是控制最后的长度的
+    可以通过控制hop_length来是的最后出来的数据的shape和帧数是对应的
+
+    f: frame
+    fps: 帧率
+    1s有16000个因素
+    1s有30帧
+    第一帧的图像是对应着第一帧的因素
+    最后一帧的图像是对应着最后一帧的因素
+    Args:
+        x:
+        fft_length:
+        hop_length:
+
+    Returns:
+    """
+
+    # 这个是我写的计算shape的方法
+    hop_length = int(sample_rate / fps)  # 这个可以说是固定的, 将视频转为25帧, 在获得音频的时候使用16000的采样率
+    lenght = x.shape[0]
+    shape = (lenght // hop_length + 1, fft_length)
+
+
+    # 先在x的两边进行一个padding, padding的长度是fft_length//2, 就是窗口大小的1/2
     x = np.pad(x, int(fft_length//2), mode='reflect')
-    
-    noverlap = fft_length - hop_length
-    shape = x.shape[:-1]+((x.shape[-1]-noverlap)//hop_length, fft_length)
+
+    # noverlap = fft_length - hop_length
+    # shape = x.shape[:-1]+((x.shape[-1]-noverlap)//hop_length,
+    #                       fft_length
+    #                       )
+
     strides = x.strides[:-1]+(hop_length*x.strides[-1], x.strides[-1])
+
     result = np.lib.stride_tricks.as_strided(x, shape=shape,
                                              strides=strides)
     
     fft_window = get_window('hann', fft_length, fftbins=True)
     result = np.fft.rfft(fft_window * result, n=fft_length).T
-    
+
     return np.abs(result)    
     
     
@@ -49,8 +84,11 @@ for subdir in sorted(subdirList):
     print(subdir)
     if not os.path.exists(os.path.join(targetDir, subdir)):
         os.makedirs(os.path.join(targetDir, subdir))
-    _,_, fileList = next(os.walk(os.path.join(dirName,subdir)))
-    prng = RandomState(int(subdir[1:])) 
+    _,_, fileList = next(os.walk(os.path.join(dirName, subdir)))
+
+    # 生成一个随机的算子
+    prng = RandomState(int(subdir[1:]))
+
     for fileName in sorted(fileList):
         # Read audio file
         x, fs = sf.read(os.path.join(dirName,subdir,fileName))
@@ -64,7 +102,6 @@ for subdir in sorted(subdirList):
         D_mel = np.dot(D, mel_basis)
         D_db = 20 * np.log10(np.maximum(min_level, D_mel)) - 16
         S = np.clip((D_db + 100) / 100, 0, 1)    
-        # save spect    
+        # save spect
         np.save(os.path.join(targetDir, subdir, fileName[:-4]),
-                S.astype(np.float32), allow_pickle=False)    
-        
+                S.astype(np.float32), allow_pickle=False)
