@@ -1,3 +1,9 @@
 checkpoints/
 notebooks/
 *.ipynb
+generate_audio/
+generate_lm/
+generate_lm_np/
+generate_wavs/
+*.ckpt
+*.pt

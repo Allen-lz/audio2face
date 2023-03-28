@@ -2,8 +2,12 @@
 这个就是语音处理
 wav ---> 频谱
 
-
 所以可以将这个改成生成数据的
+
+1. 读取到视频, 将视频中的图像和音频进行分离。
+2. 对图像进行人脸检测, 和关键点检测。
+3. 对分离出来的音频的数据进行预处理和与视频图像进行对齐。
+
 """
 import os
 import pickle
@@ -45,7 +49,6 @@ def pySTFT(x, fft_length=1024, hop_length=256, fps=25, sample_rate=16000):
     hop_length = int(sample_rate / fps)  # 这个可以说是固定的, 将视频转为25帧, 在获得音频的时候使用16000的采样率
     lenght = x.shape[0]
     shape = (lenght // hop_length + 1, fft_length)
-
 
     # 先在x的两边进行一个padding, padding的长度是fft_length//2, 就是窗口大小的1/2
     x = np.pad(x, int(fft_length//2), mode='reflect')
@@ -100,6 +103,7 @@ for subdir in sorted(subdirList):
         D = pySTFT(wav).T
         # Convert to mel and normalize
         D_mel = np.dot(D, mel_basis)
+
         D_db = 20 * np.log10(np.maximum(min_level, D_mel)) - 16
         S = np.clip((D_db + 100) / 100, 0, 1)    
         # save spect

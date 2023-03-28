@@ -20,7 +20,6 @@ for key, val in c_checkpoint['model_b'].items():
     new_state_dict[new_key] = val
 C.load_state_dict(new_state_dict)
 num_uttrs = 10
-# len_crop = 128 // 2
 
 len_crop = 128
 
@@ -28,7 +27,6 @@ len_crop = 128
 rootDir = './spmel'
 dirName, subdirList, _ = next(os.walk(rootDir))
 print('Found directory: %s' % dirName)
-
 
 speakers = []
 for speaker in sorted(subdirList):
@@ -55,6 +53,8 @@ for speaker in sorted(subdirList):
         else:
             left = np.random.randint(0, tmp.shape[0]-len_crop)  # 这里是随机一个位置
         melsp = torch.from_numpy(tmp[np.newaxis, left:left+len_crop, :]).cuda()
+
+        # (1, 128, 80)
         emb = C(melsp)
         embs.append(emb.detach().squeeze().cpu().numpy())
 
@@ -68,4 +68,3 @@ for speaker in sorted(subdirList):
     
 with open(os.path.join(rootDir, 'train.pkl'), 'wb') as handle:
     pickle.dump(speakers, handle)
-
