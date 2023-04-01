@@ -42,6 +42,11 @@ parser.add_argument('--num_size', type=int, default=16, help='num size')
 parser.add_argument('--gamma', type=float, default=0.1, help='lr gamma')
 parser.add_argument('--lr_policy', type=str, default='step', help='lr schedule policy')
 
+# model save
+parser.add_argument('--jpg_freq', type=int, default=1, help='')
+parser.add_argument('--ckpt_epoch_freq', type=int, default=1000, help='')
+parser.add_argument('--ckpt_save_dir', type=str, default="checkpoints/ckpts", help='')
+
 opt_parser = parser.parse_args()
 
 
@@ -127,6 +132,7 @@ def calculate_loss(fls, fl_dis_pred, face_id, device):
 def train(device):
     """
     其实这里要先训练C之后再加载训练更好的C来训练G的
+    这里我为了简单方便, 就是一起train的, 之后可以对比看看效果如何
     Args:
         device:
     Returns:
@@ -156,7 +162,10 @@ def train(device):
     train_dataloader = torch.utils.data.DataLoader(train_data,
                                                    batch_size=opt_parser.batch_size, # 这里的batchsize是选取几段wav的意思, 不是通常的那种batchsize
                                                    shuffle=False, num_workers=0,
-                                                   collate_fn=train_data.my_collate_in_segments_noemb)
+                                                   collate_fn=train_data.my_collate_in_segments)
+
+
+    best_loss = float("inf")
     for i in range(opt_parser.nepoch):
         for batch in train_dataloader:
             """
@@ -182,8 +191,17 @@ def train(device):
             lr_scheduler.step()
 
             if i % 500 == 0:
-                print(str(i).zfill(6), round(loss.item(), 6), round(optimizer.state_dict()['param_groups'][0]['lr'], 8))
+                print("epoch: {}".format(str(i).zfill(6)), round(loss.item(), 6), round(optimizer.state_dict()['param_groups'][0]['lr'], 8))
 
+            if (i + 1) % opt_parser.ckpt_epoch_freq == 0:
+                if not os.path.exists(opt_parser.ckpt_save_dir):
+                    os.makedirs(opt_parser.ckpt_save_dir)
+                torch.save(C.state_dict(), os.path.join(opt_parser.ckpt_save_dir, '{}_C.pth'.format(str(i + 1).zfill(5))))
+                torch.save(G.state_dict(), os.path.join(opt_parser.ckpt_save_dir, '{}_G.pth'.format(str(i + 1).zfill(5))))
+                if best_loss > loss.item():
+                    best_loss = loss.item()
+                    torch.save(C.state_dict(), os.path.join(opt_parser.ckpt_save_dir, 'best_loss_{}_C.pth'.format(str(round(best_loss, 6)))))
+                    torch.save(G.state_dict(), os.path.join(opt_parser.ckpt_save_dir, 'best_loss_{}_G.pth'.format(str(round(best_loss, 6)))))
 
 if __name__ == "__main__":
     device = "cuda"

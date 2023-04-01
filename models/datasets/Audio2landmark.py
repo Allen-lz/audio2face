@@ -130,9 +130,7 @@ class Audio2landmark_Dataset(data.Dataset):
         # print('-> get item {}: {} {}'.format(item, self.fl_data[item][1][0], self.fl_data[item][1][1]))
         return self.fl_data_list[item], self.au_data_list[item], self.fl_std_list[item]
 
-    def my_collate_in_segments_noemb(self,
-                                     batch
-                                     ):
+    def my_collate_in_segments(self, batch):
         """
         这个是没有face emb的,慢慢来,暂时不要有id emb的
         Args:

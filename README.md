@@ -5,7 +5,7 @@ python video_analysis_and_data_generation.py
 
 #### Run
 ```
-python models/train.py
+python models/train_audio2landmark.py
 ```
 
 #### update
