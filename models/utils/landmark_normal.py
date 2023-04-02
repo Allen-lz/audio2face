@@ -1,5 +1,5 @@
 import numpy as np
-def norm_input_face(shape_3d):
+def norm_input_face(shape_3d, phrase="train"):
     """
     Args:
         shape_3d: 没有进行归一化
@@ -21,6 +21,7 @@ def norm_input_face(shape_3d):
 
     shape_3d[:, :, -1] = shape_3d[:, :, -1] / depth_abs
 
-    return shape_3d.reshape(-1, 204)
-    # 将用于标准化的系数返回, 便于之后还原
-    # return shape_3d#, scale, shift
+    if phrase == "train":
+        return shape_3d.reshape(-1, 204)
+    else:
+        return shape_3d.reshape(-1, 204), scale, shift

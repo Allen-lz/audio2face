@@ -16,7 +16,7 @@ sys.path.append("..")
 sys.path.append("../..")
 from models.networks.audio2landmark_network import Audio2landmark_content
 from models.networks.audio2landmark_speaker_aware_network import Audio2landmark_speaker_aware
-from models.datasets.Audio2landmark import Audio2landmark_Dataset
+from models.datasets.Audio2landmark import Audio2landmark_Dataset, Audio2landmark_Eval_Dataset
 from warmup_scheduler import GradualWarmupScheduler
 from model_bl import D_VECTOR
 import matplotlib.pyplot as plt
@@ -128,29 +128,38 @@ def calculate_loss(fls, fl_dis_pred, face_id, device):
 
     return loss
 
-def draw_res(fls_gt, fl_dis_pred, face_id):
+def draw_res(fls_gt, fl_dis_pred, face_id, data_scales, data_shifts, std_scales, std_shifts):
     # 先将关键点统一scale到一个size
     fls_gt = fls_gt[:, -1, :]
     fls_gt = fls_gt.detach().cpu()
+
+    data_scales = data_scales[:, -1, :, :].detach().cpu()
+    data_shifts = data_shifts[:, -1, :, :].detach().cpu()
+    std_scales = std_scales[:, -1, :, :].detach().cpu()
+    std_shifts = std_shifts[:, -1, :, :].detach().cpu()
+
     fl_dis_pred = fl_dis_pred.detach().cpu()
     face_id = face_id.detach().cpu()
 
-    fl_pred = np.array((fl_dis_pred + face_id) * 336, dtype=np.int64)
-    fls_gt = np.array(fls_gt * 336, dtype=np.int64)
-    # 将关键点的格式转成blendershape的形式
+    for fl_dis_i, fls_gt_i, face_id_i, data_scale_i, data_shift_i, std_scale_i, std_shift_i in zip(fl_dis_pred, fls_gt, face_id, data_scales, data_shifts, std_scales, std_shifts):
+        """
+        std_scales, std_shifts的作用仅仅是为了在训练的时候能对齐数据而已,在inference反解码的时候用的还是data_scales, data_shifts, 毕竟data是target
+        """
 
-    for fl_pred_i, fls_gt_i in zip(fl_pred, fls_gt):
+        fl_dis_i, fls_gt_i = fl_dis_i.reshape(68, 3), fls_gt_i.reshape(68, 3)
+        face_id_i = face_id_i.reshape(68, 3)
 
+        fls_gt_i = fls_gt_i[:, :2] / data_scale_i - data_shift_i
 
-        fl_pred_i, fls_gt_i = fl_pred_i.reshape(68, 3), fls_gt_i.reshape(68, 3)
+        fl_pre_i = fl_dis_i + face_id_i
+        fl_pre_i = fl_pre_i[:, :2] / data_scale_i - data_shift_i
 
-
-        gt_plane = np.zeros((448, 448, 3))
+        gt_plane = np.zeros((336, 336, 3))
         gt_img = drawFace(fls_gt_i, gt_plane)
-        pred_plane = np.zeros((448, 448, 3))
-        pred_img = drawFace(fl_pred_i, pred_plane)
+        pred_plane = np.zeros((336, 336, 3))
+        pred_img = drawFace(fl_pre_i, pred_plane)
 
-        plt.subplot(121), plt.imshow(gt_img)
+        plt.subplot(121), plt, plt.imshow(gt_img)
         plt.subplot(122), plt.imshow(pred_img)
         plt.show()
 
@@ -180,7 +189,7 @@ def eval(device):
     G = Audio2landmark_speaker_aware().to(device)
     G.load_state_dict(torch.load(opt_parser.G_ckpt))
 
-    val_data = Audio2landmark_Dataset(num_window_frames=opt_parser.num_window_frames,
+    val_data = Audio2landmark_Eval_Dataset(num_window_frames=opt_parser.num_window_frames,
                                         num_emb_window_frames=opt_parser.num_emb_window_frames,
                                         num_size=opt_parser.num_size)
     val_dataloader = torch.utils.data.DataLoader(val_data,
@@ -193,8 +202,8 @@ def eval(device):
             train_dataloader中的batch的个数是与参与构建dataset的wav个数有关的
             一个wav是同一个人在一段时间说的一段话, 
             """
-            fls, aus, emb_aus, std = batch
-            fls, aus, emb_aus, std = fls.to(device), aus.to(device), emb_aus.to(device), std.to(device)
+            fls, aus, emb_aus, std, data_scales, data_shifts, std_scales, std_shifts = batch
+            fls, aus, emb_aus, std, data_scales, data_shifts, std_scales, std_shifts = fls.to(device), aus.to(device), emb_aus.to(device), std.to(device), data_scales.to(device), data_shifts.to(device), std_scales.to(device), std_shifts.to(device)
             std = std[:, 0, :]
             fl_dis_pred, face_id = C(aus, std)
 
@@ -205,7 +214,7 @@ def eval(device):
             fl_dis_pred += emb_fl_dis_pred
 
             loss = calculate_loss(fls, fl_dis_pred, face_id, device)
-            draw_res(fls, fl_dis_pred, face_id)
+            draw_res(fls, fl_dis_pred, face_id, data_scales, data_shifts, std_scales, std_shifts)
 
 
 if __name__ == "__main__":
