@@ -45,7 +45,7 @@ parser.add_argument('--lr_policy', type=str, default='step', help='lr schedule p
 # model save
 parser.add_argument('--jpg_freq', type=int, default=1, help='')
 parser.add_argument('--ckpt_epoch_freq', type=int, default=1000, help='')
-parser.add_argument('--ckpt_save_dir', type=str, default="checkpoints/ckpts", help='')
+parser.add_argument('--ckpt_save_dir', type=str, default="checkpoints/audio2landmark", help='')
 
 opt_parser = parser.parse_args()
 

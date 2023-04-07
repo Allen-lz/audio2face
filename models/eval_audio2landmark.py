@@ -39,8 +39,8 @@ parser.add_argument('--batch_size', type=int, default=1, help='batch size')
 parser.add_argument('--num_size', type=int, default=16, help='num size')
 parser.add_argument('--gamma', type=float, default=0.1, help='lr gamma')
 parser.add_argument('--lr_policy', type=str, default='step', help='lr schedule policy')
-parser.add_argument('--C_ckpt', type=str, default='checkpoints/ckpts/best_C.pth', help='lr schedule policy')
-parser.add_argument('--G_ckpt', type=str, default='checkpoints/ckpts/best_G.pth', help='lr schedule policy')
+parser.add_argument('--C_ckpt', type=str, default='checkpoints/audio2landmark/best_C.pth', help='lr schedule policy')
+parser.add_argument('--G_ckpt', type=str, default='checkpoints/audio2landmark/best_G.pth', help='lr schedule policy')
 opt_parser = parser.parse_args()
 
 
