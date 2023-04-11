@@ -25,15 +25,16 @@ from models.networks.landmark2face_network import UNet
 from models.datasets.Landmark2face import ImageTranslationDataset
 from models.networks.landmark2face_network import VGGLoss, define_D, GANLoss
 
+
 # 日志的格式
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)-9s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--lr_d', type=float, default=6e-4, help='learning rate')
-parser.add_argument('--lr_g', type=float, default=6e-4, help='learning rate')
+parser.add_argument('--lr_d', type=float, default=1e-4, help='learning rate')
+parser.add_argument('--lr_g', type=float, default=3e-4, help='learning rate')
 
 parser.add_argument('--epoch', type=int, default=1000, help='number of epochs to train for')
-parser.add_argument('--batch_size', type=int, default=2, help='batch size')
+parser.add_argument('--batch_size', type=int, default=6, help='batch size')
 parser.add_argument('--use_discriminator', type=int, default=1, help='')
 
 parser.add_argument('--gan_g_loss_weight', type=float, default=0.01, help='')
@@ -44,8 +45,12 @@ parser.add_argument('--ckpt_epoch_freq', type=int, default=200, help='')
 parser.add_argument('--ckpt_save_dir', type=str, default="checkpoints/landmark2face", help='')
 
 # dataset save
-parser.add_argument('--train_data_dir', type=str, default="D:/datasets/audio2face/face_images_3", help='')
-parser.add_argument('--eval_data_dir', type=str, default="D:/datasets/audio2face/face_images_eval_3", help='')
+# /data/xujiajian/dataset/face_images_eval_3
+# /data/xujiajian/dataset/face_images_3
+parser.add_argument('--train_data_dir', type=str, default="/data/xujiajian/dataset/face_images_eval_3", help='')
+parser.add_argument('--eval_data_dir', type=str, default="/data/xujiajian/dataset/face_images_eval_3", help='')
+# parser.add_argument('--train_data_dir', type=str, default="D:/datasets/audio2face/face_images_eval_3", help='')
+# parser.add_argument('--eval_data_dir', type=str, default="D:/datasets/audio2face/face_images_eval_3", help='')
 parser.add_argument('--device', type=str, default="cuda:0", help='')
 parser.add_argument('--max_num_per_video', type=int, default=2000, help='')
 
@@ -109,11 +114,15 @@ def train(opt):
     # UNET生成模型
     model = UNet(n_channels=3, n_classes=3)
     model.to(device)
+    # 加载预训练模型
+    model.load_state_dict(
+        torch.load("checkpoints/landmark2face/i2i_epoch_100_20221207183511/model.pt"))
+    model.to(device)
 
     # 判别器
     if USE_DISCRIMINATOR:
-        # 创建判别器
-        discriminator = define_D(6, 16, 4, num_D=1, use_sigmoid=True)
+        # 创建判别器(通过对权重大小的分析, 我复现了网络结构)
+        discriminator = define_D(6, 16, 6, num_D=1, use_sigmoid=True)
         discriminator.to(device)
 
     # 损失函数\优化器
