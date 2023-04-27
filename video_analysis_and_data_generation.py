@@ -33,7 +33,7 @@ class face_process():
 
         self.size = 336
 
-        self.mel_basis = mel(16000, 1024, fmin=90, fmax=7600, n_mels=80).T
+        self.mel_basis = mel(16000, 640, fmin=90, fmax=7600, n_mels=80).T
         self.min_level = np.exp(-100 / 20 * np.log(10))
         self.b, self.a = self.butter_highpass(30, 16000, order=5)
         self.prng = RandomState()
@@ -44,7 +44,55 @@ class face_process():
         b, a = signal.butter(order, normal_cutoff, btype='high', analog=False)
         return b, a
 
-    def pySTFT(self, x, fft_length=1024, fps=25, frames=2860, sample_rate=16000):
+
+    def pySTFT_v2(self, x, fps=25, frames=2860, sample_rate=16000):
+        """
+        这里是控制最后的长度的
+        可以通过控制hop_length来是的最后出来的数据的shape和帧数是对应的
+
+        f: frame
+        fps: 帧率
+        1s有16000个因素
+        1s有30帧
+        第一帧的图像是对应着第一帧的因素
+        最后一帧的图像是对应着最后一帧的因素
+        Args:
+            x:
+            fft_length: 采样的窗口的长度， 原来的代码中用的是1024
+            hop_length: 步长
+
+        Returns:
+        """
+
+        hop_length = len(x) / (frames - 1)
+
+        hop_length = int(hop_length)
+        fft_length = int(sample_rate / fps) # 这是标准的窗口大小, 当然你也可以设置为1024, 就是会有overlap
+
+        shape = (frames, fft_length)
+
+        # 先在x的两边进行一个padding, padding的长度是fft_length//2, 就是窗口大小的1/2
+        x = np.pad(x, int(fft_length // 2), mode='reflect')
+
+        # noverlap = fft_length - hop_length
+        # shape = x.shape[:-1]+((x.shape[-1]-noverlap)//hop_length,
+        #                       fft_length
+        #                       )
+
+        strides = x.strides[:-1] + (hop_length * x.strides[-1], x.strides[-1])
+
+        result = np.lib.stride_tricks.as_strided(x,
+                                                 shape=shape,
+                                                 strides=strides)
+
+        fft_window = get_window('hann', fft_length, fftbins=True)
+        result = np.fft.rfft(fft_window * result, n=fft_length).T
+
+        print(result.shape)
+
+        return np.abs(result)
+
+    def pySTFT_v1(self, x, fps=25, frames=2860, sample_rate=16000):
         """
         这里是控制最后的长度的
         可以通过控制hop_length来是的最后出来的数据的shape和帧数是对应的
@@ -62,9 +110,9 @@ class face_process():
 
         Returns:
         """
-
         # 这个是我写的计算shape的方法
-        hop_length = int(sample_rate / fps)  # 这个可以说是固定的, 将视频转为25帧, 在获得音频的时候使用16000的采样率
+        hop_length = int(sample_rate / fps)  # 这个可以说是固定的, 将视频转为25帧, 在获得音频的时候使用16000的采样率(不过是不padding的)
+        fft_length = hop_length
 
         # 可以直接就使用frames, 而不通过下面的计算, 使用下面的计算的话会除不尽
         # lenght = x.shape[0]
@@ -72,6 +120,56 @@ class face_process():
 
         shape = (frames, fft_length)
 
+        # 不过这种形式应该是不padding的
+        # 先在x的两边进行一个padding, padding的长度是fft_length//2, 就是窗口大小的1/2
+        # x = np.pad(x, int(fft_length // 2), mode='reflect')
+
+        # noverlap = fft_length - hop_length
+        # shape = x.shape[:-1]+((x.shape[-1]-noverlap)//hop_length,
+        #                       fft_length
+        #                       )
+
+        strides = x.strides[:-1] + (hop_length * x.strides[-1], x.strides[-1])
+
+        result = np.lib.stride_tricks.as_strided(x,
+                                                 shape=shape,
+                                                 strides=strides)
+
+        fft_window = get_window('hann', fft_length, fftbins=True)
+        result = np.fft.rfft(fft_window * result, n=fft_length).T
+
+        return np.abs(result)
+
+    def pySTFT_v0(self, x, fft_length=1024, fps=25, frames=2860, sample_rate=16000):
+        """
+        这个是我写的最原始的代码
+
+        这里是控制最后的长度的
+        可以通过控制hop_length来是的最后出来的数据的shape和帧数是对应的
+
+        f: frame
+        fps: 帧率
+        1s有16000个因素
+        1s有30帧
+        第一帧的图像是对应着第一帧的因素
+        最后一帧的图像是对应着最后一帧的因素
+        Args:
+            x:
+            fft_length: 采样的窗口的长度
+            hop_length: 步长
+
+        Returns:
+        """
+        # 这个是我写的计算shape的方法
+        hop_length = int(sample_rate / fps)  # 这个可以说是固定的, 将视频转为25帧, 在获得音频的时候使用16000的采样率(不过是不padding的)
+
+        # 可以直接就使用frames, 而不通过下面的计算, 使用下面的计算的话会除不尽
+        # lenght = x.shape[0]
+        # shape = (lenght // hop_length + 1, fft_length)
+
+        shape = (frames, fft_length)
+
+        # 不过这种形式应该是不padding的
         # 先在x的两边进行一个padding, padding的长度是fft_length//2, 就是窗口大小的1/2
         x = np.pad(x, int(fft_length // 2), mode='reflect')
 
@@ -204,7 +302,7 @@ class face_process():
         # Ddd a little random noise for model roubstness
         wav = y * 0.96 + (self.prng.rand(y.shape[0]) - 0.5) * 1e-06
         # Compute spect
-        D = self.pySTFT(wav, fps=fps, frames=frames, sample_rate=sample_rate).T
+        D = self.pySTFT_v2(wav, fps=fps, frames=frames, sample_rate=sample_rate).T
         # Convert to mel and normalize
         D_mel = np.dot(D, self.mel_basis)
         D_db = 20 * np.log10(np.maximum(self.min_level, D_mel)) - 16

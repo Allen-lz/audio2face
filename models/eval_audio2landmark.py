@@ -159,8 +159,8 @@ def draw_res(fls_gt, fl_dis_pred, face_id, data_scales, data_shifts, std_scales,
         pred_plane = np.zeros((336, 336, 3))
         pred_img = drawFace(fl_pre_i, pred_plane)
 
-        plt.subplot(121), plt, plt.imshow(gt_img)
-        plt.subplot(122), plt.imshow(pred_img)
+        plt.subplot(121), plt.title("ground truth"), plt.imshow(gt_img)
+        plt.subplot(122), plt.title("predict"), plt.imshow(pred_img)
         plt.show()
 
 

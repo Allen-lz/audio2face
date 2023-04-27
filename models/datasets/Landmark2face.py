@@ -2,8 +2,8 @@
 
 """
 # File   : image_translation_dataset.py
-# Time   : 2022/11/4 14:44
-# Author : Xu Jiajian
+# Time   : 2023/4/11 14:44
+# Author : luzeng
 # version: python 3.9
 """
 
