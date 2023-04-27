@@ -15,13 +15,12 @@ import matplotlib.pyplot as plt
 from scipy.signal import get_window
 from face_align import Face_Align
 import os
-import numpy as np
 import soundfile as sf
 from scipy import signal
 from librosa.filters import mel
 from numpy.random import RandomState
 
-class face_process():
+class FaceProcess():
     def __init__(self):
         mp_face_detection = mp.solutions.face_detection
         self.face_detection = mp_face_detection.FaceDetection(
@@ -217,6 +216,23 @@ class face_process():
         kps_np = np.concatenate(kps_list, axis=0)
         return face_images, video_profile_info, kps_np
 
+    def detect_facelandmark(self, img_rgb):
+
+        face_bbox = self.face_mask_google_mediapipe(self.face_detection, img_rgb)
+
+        x1, y1, x2, y2 = face_bbox
+        h, w = img_rgb.shape[:2]
+        x1, y1, x2, y2 = self.bbox_expansion_rate(x1, y1, x2, y2, h, w, 0.8)
+        face_img = img_rgb[y1:y2, x1:x2, :]
+
+        face_img = cv2.resize(face_img, (self.size, self.size))
+
+        # 保存关键点
+        lm = self.fa.__run__(face_img)
+
+        return lm, face_img
+
+
     def face_mask_google_mediapipe(self,
                                    face_detection,
                                    image,  # cv2读取并转RGB的图像
@@ -333,7 +349,7 @@ if __name__ == "__main__":
     if not os.path.exists(generate_lm_np_dir):
         os.makedirs(generate_lm_np_dir)
 
-    face_process = face_process()
+    face_process = FaceProcess()
 
     for video_path in video_data_dir_list:
 
