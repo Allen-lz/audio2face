@@ -218,6 +218,123 @@ class Audio2landmark_speaker_aware(nn.Module):
 
         self.lstm_g_win_size = lstm_g_win_size
         self.add_info_size = add_info_size
+
+        self.audio_content_encoder = nn.LSTM(input_size=audio_feat_size,
+                                             hidden_size=c_enc_hidden_size,
+                                             num_layers=num_layers,
+                                             dropout=drop_out,
+                                             bidirectional=False,
+                                             batch_first=True)
+
+        self.use_audio_projection = not (audio_dim == c_enc_hidden_size)
+        if(self.use_audio_projection):
+            self.audio_projection = nn.Sequential(
+                nn.Linear(in_features=c_enc_hidden_size, out_features=256),
+                nn.LeakyReLU(0.02),
+                nn.Linear(256, 128),
+                nn.LeakyReLU(0.02),
+                nn.Linear(128, audio_dim),
+            )
+
+
+        ''' original version '''
+        self.spk_emb_encoder = nn.Sequential(
+            nn.Linear(in_features=spk_feat_size, out_features=256),
+            nn.LeakyReLU(0.02),
+            nn.Linear(256, 128),
+            nn.LeakyReLU(0.02),
+            nn.Linear(128, spk_emb_enc_size),
+        )
+
+        d_model = transformer_d_model * heads
+        N = N
+        heads = heads
+
+        self.encoder = Encoder(d_model, N, heads, in_size=audio_dim + spk_emb_enc_size + z_size)
+        self.decoder = Decoder(d_model, N, heads, in_size=204)
+        self.out = nn.Sequential(
+            nn.Linear(in_features=d_model + z_size, out_features=512),
+            nn.LeakyReLU(0.02),
+            nn.Linear(512, 256),
+            nn.LeakyReLU(0.02),
+            nn.Linear(256, 204),
+        )
+
+
+    def forward(self,
+                au,         # 说话人的音频
+                emb,        # 用于预测说话人emb的au
+                add_z_spk=True):
+        """
+        Args:
+            au: 18个音频帧(18个视频帧对应的音频mel)
+            emb: 在inference的阶段是可以一直累计并求平均, 这样慢慢的emb的结果就会越来越稳定
+            add_z_spk: 是否要在emb上加噪
+        Returns:
+
+        """
+        # audio
+        audio_encode, (_, _) = self.audio_content_encoder(au)
+        audio_encode = audio_encode[:, -1, :]  # [batchszie, 256], 这里是取了最后一个算是综合的结果
+
+        if self.use_audio_projection:
+            audio_encode = self.audio_projection(audio_encode)
+
+        # spk
+        # print(emb.shape)  # [batchszie, 256]
+
+        spk_encode = self.spk_emb_encoder(emb)  # torch.Size([16, 128])
+
+        # 增加噪声
+        if add_z_spk:
+            z_spk = torch.tensor(torch.randn(spk_encode.shape)*0.01, requires_grad=False, dtype=torch.float).to(spk_encode.device)
+            spk_encode = spk_encode + z_spk
+
+        # comb
+        # cat + 加噪
+        z = torch.tensor(torch.zeros(au.shape[0], 128), requires_grad=False, dtype=torch.float).to(audio_encode.device)
+        comb_encode = torch.cat((audio_encode, spk_encode, z), dim=1)
+        src_feat = comb_encode.unsqueeze(0)
+
+        e_outputs = self.encoder(src_feat)[0]
+
+        # 再加噪
+        e_outputs = torch.cat((e_outputs, z), dim=1)
+
+        fl_pred = self.out(e_outputs)
+
+        return fl_pred
+
+
+class Audio2landmark_speaker_aware_cvae(nn.Module):
+    def __init__(self, audio_feat_size=80, c_enc_hidden_size=256, num_layers=3, drop_out=0,
+                 spk_feat_size=256, spk_emb_enc_size=128, lstm_g_win_size=64, add_info_size=6,
+                 transformer_d_model=32, N=2, heads=2, z_size=128, audio_dim=256):
+        """
+        这个网络加入了显示的headpose的控制, 采用的是自回归的训练方式
+        backbone还是使用的是Audio2landmark_speaker_aware原来的网络结构
+
+        fl_pred还是用原来的方式来训练, 只是后面会加一个旋转处理
+        旋转偏移采用cvae的方式来训练, headpose的cvae是要先单独训练的
+        Args:
+            audio_feat_size:
+            c_enc_hidden_size:
+            num_layers:
+            drop_out:
+            spk_feat_size:
+            spk_emb_enc_size:
+            lstm_g_win_size:
+            add_info_size:
+            transformer_d_model:
+            N:
+            heads:
+            z_size:
+            audio_dim:
+        """
+        super(Audio2landmark_speaker_aware_cvae, self).__init__()
+
+        self.lstm_g_win_size = lstm_g_win_size
+        self.add_info_size = add_info_size
         self.audio_content_encoder = nn.LSTM(input_size=audio_feat_size,
                                              hidden_size=c_enc_hidden_size,
                                              num_layers=num_layers,

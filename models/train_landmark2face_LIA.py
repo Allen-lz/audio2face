@@ -34,6 +34,8 @@ from models.networks.landmarks_LIA.vgg19 import VGGLoss
 from models.networks.landmarks_LIA.generator import Generator
 from models.networks.landmarks_LIA.discriminator import Discriminator
 
+import matplotlib.pyplot as plt
+
 from models.datasets.Landmark2face_LIA import ImageTranslationDatasetForLIA, vis_landmark_on_img
 
 from collections import namedtuple
@@ -43,7 +45,7 @@ import cv2
 import tqdm
 import skvideo.io
 import mediapipe as mp
-
+from models._3dmm.inference_3dmm import FaceReconBFM
 import imageio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)-9s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
@@ -233,6 +235,10 @@ def train():
     # LIA生成模型
     generator = Generator(IMG_SIZE, LATENT_DIM_STYLE, LANDMARKS_DIM, LATENT_DIM_MOTION, 1)
 
+
+    # 创建一个人脸重建的模块
+    face_recon = FaceReconBFM()
+
     # 预训练checkpoint
     # ckpt_dict = torch.load(pretrained_model)["gen"]
     # new_ckpt_dict = {}
@@ -244,7 +250,7 @@ def train():
     #     elif "direction" in key:
     #         continue
     #     new_ckpt_dict[key] = val
-    new_ckpt_dict = torch.load(pretrained_model)
+    new_ckpt_dict = torch.load(pretrained_model)  # 加载预训练模型
     generator.load_state_dict(new_ckpt_dict, strict=False)
     generator.to(device)
 
@@ -266,6 +272,8 @@ def train():
 
     # 损失函数、优化器
     l1_loss_func = torch.nn.L1Loss(reduction="none")
+    mse_loss_func = torch.nn.MSELoss(reduction="none")
+
     vgg_loss_func = VGGLoss().to(device)
     landmarks_loss_func = FaceLandmarksLoss(DEVICE, landmark_ckpt)
 
@@ -312,7 +320,36 @@ def train():
             crop_vgg_loss = cal_crop_vgg_loss(img_target_recon, img_target, _margin, vgg_loss_func)
             gan_g_loss = g_nonsaturating_loss(img_recon_pred) * GAN_G_LOSS_WEIGHT  # 这是一个愚弄loss
 
-            g_loss = vgg_loss + crop_vgg_loss + l1_loss + fl_loss + gan_g_loss
+            # 增加一个loss, 使用重建出来的几千个点来做loss, 我认为这个loss应该放在g_loss上
+            # img_target_recon
+            # img_target
+            face_proj_recon = (img_target_recon / 2 + 0.5) * 255
+            face_proj_target = (img_target / 2 + 0.5) * 255
+            # tensor rgb ---> tensor bgr
+            face_proj_recon = face_proj_recon[:, [2, 1, 0], :, ]
+            face_proj_target = face_proj_target[:, [2, 1, 0], :, ]
+
+            recon_proj_vex = face_recon.run_tensor(face_proj_recon.permute(0, 2, 3, 1)) / 224  # 因为人脸重建的输入的尺度就是224, 是固定的
+            target_proj_vex = face_recon.run_tensor(face_proj_target.permute(0, 2, 3, 1)) / 224
+
+
+            vex_l1_loss = l1_loss_func(recon_proj_vex, target_proj_vex)
+            vex_mse_loss = mse_loss_func(recon_proj_vex, target_proj_vex)
+
+            vex_l1_loss = vex_l1_loss.mean(-1).sum(-1).mean(0)
+            vex_mse_loss = vex_mse_loss.mean(-1).sum(-1).mean(0)
+
+            recon_vex_loss = (vex_l1_loss + vex_mse_loss) / 2
+
+            # =========================================================================================================
+            # vis_face_proj_recon = np.array(face_proj_recon[0].permute(1, 2, 0).detach().cpu(), dtype=np.uint8)
+            # vis_face_proj_target = np.array(face_proj_target[0].permute(1, 2, 0).detach().cpu(), dtype=np.uint8)
+            # plt.subplot(121), plt.imshow(vis_face_proj_target)
+            # plt.subplot(122), plt.imshow(vis_face_proj_recon)
+            # plt.show()
+            # =========================================================================================================
+
+            g_loss = vgg_loss + crop_vgg_loss + l1_loss + fl_loss + gan_g_loss + recon_vex_loss
 
             g_loss.backward()
             optimizer_G.step()
@@ -333,6 +370,11 @@ def train():
             d_loss.backward()
             optimizer_D.step()
             # ==========================================================================================================
+            # conda activate automatic
+            # python models/train_landmark2face_LIA.py
+            # ==========================================================================================================
+
+
 
             # 保存训练中间结果, 用于快速验证
             img_saver.save(img_source, img_target_recon, img_target, epoch=ep, global_step=global_step)
@@ -346,13 +388,14 @@ def train():
                 tensorboard_writer.add_scalar("G_Gan", gan_g_loss.cpu().detach().numpy(), global_step=global_step)
                 tensorboard_writer.add_scalar("D_GAN", d_loss.cpu().detach().numpy(), global_step=global_step)
                 tensorboard_writer.add_scalar("Loss", (g_loss + d_loss).cpu().detach().numpy(), global_step=global_step)
+                tensorboard_writer.add_scalar("Vex_Recon", (recon_vex_loss).cpu().detach().numpy(), global_step=global_step)
 
                 for key, val in generator.state_dict().items():
                     if re.search(r"(to_flow\.5)|(to_rgbs\.5)|(convs\.10)|(direction)|(fc)|(enc\.convs\.4)", key):
                         tensorboard_writer.add_histogram(key, val, global_step=global_step)
 
                 logging.info(
-                    "Step: {:}, L1: {:.6f}, VGG: {:.6f}, Crop VGG: {:.6f}, FL: {:.6f}, G_Gan: {:.6f}, D_GAN: {:.6f}, Loss: {:.6f}".format(
+                    "Step: {:}, L1: {:.6f}, VGG: {:.6f}, Crop VGG: {:.6f}, FL: {:.6f}, G_Gan: {:.6f}, D_GAN: {:.6f}, Loss: {:.6f}, Vex_Recon: {:.6f}".format(
                         global_step,
                         l1_loss.detach().cpu().numpy(),
                         vgg_loss.detach().cpu().numpy(),
@@ -360,7 +403,8 @@ def train():
                         fl_loss.detach().cpu().numpy(),
                         gan_g_loss.detach().cpu().numpy(),
                         d_loss.detach().cpu().numpy(),
-                        (g_loss + d_loss).detach().cpu().numpy()
+                        (g_loss + d_loss).detach().cpu().numpy(),
+                        (recon_vex_loss).cpu().detach().numpy()
                     )
                 )
 

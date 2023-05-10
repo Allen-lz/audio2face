@@ -9,6 +9,10 @@ import os
 from skimage import transform as trans
 import torch
 import warnings
+import matplotlib.pyplot as plt
+
+from torchvision.transforms.functional import crop
+
 warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning) 
 warnings.filterwarnings("ignore", category=FutureWarning) 
 
@@ -62,6 +66,51 @@ def resize_n_crop_img(img, lm, t, s, target_size=224., mask=None):
 
     return img, lm, mask
 
+
+# resize and crop images for face reconstruction
+def resize_n_crop_img_tensor(img, lm, t, s, target_size=224., mask=None):
+    """
+    这里对img的裁剪和缩放都要换成tensor的
+    Args:
+        img:
+        lm:
+        t:
+        s:
+        target_size:
+        mask:
+
+    Returns:
+
+    """
+
+    h0, w0 = img.shape[:2]
+    w = (w0*s).astype(np.int32)
+    h = (h0*s).astype(np.int32)
+    left = (w/2 - target_size/2 + float((t[0] - w0/2)*s)).astype(np.int32)
+    right = left + target_size
+    up = (h/2 - target_size/2 + float((h0/2 - t[1])*s)).astype(np.int32)
+    below = up + target_size
+
+    img = img.permute(2, 0, 1).unsqueeze(0)
+    img = torch.nn.Upsample(size=(h, w), mode='bilinear', align_corners=True)(img)
+
+    left = int(left)
+    up = int(up)
+    target_size = int(target_size)
+
+    img = crop(img, up, left, target_size, target_size)
+
+    if mask is not None:
+        mask = mask.resize((w, h), resample=Image.BICUBIC)
+        mask = mask.crop((left, up, right, below))
+
+    lm = np.stack([lm[:, 0] - t[0] + w0/2, lm[:, 1] -
+                  t[1] + h0/2], axis=1)*s
+    lm = lm - np.reshape(
+            np.array([(w/2 - target_size/2), (h/2-target_size/2)]), [1, 2])
+
+    return img, lm, mask
+
 # utils for face reconstruction
 def extract_5p(lm):
     lm_idx = np.array([31, 37, 40, 43, 46, 49, 55]) - 1
@@ -87,6 +136,7 @@ def align_img(img, lm, lm3D, mask=None, target_size=224., rescale_factor=102.):
     """
 
     w0, h0 = img.size
+
     if lm.shape[0] != 5:
         lm5p = extract_5p(lm)
     else:
@@ -97,7 +147,63 @@ def align_img(img, lm, lm3D, mask=None, target_size=224., rescale_factor=102.):
     s = rescale_factor/s
 
     # processing the image
-    img_new, lm_new, mask_new = resize_n_crop_img(img, lm, t, s, target_size=target_size, mask=mask)
+    img_new, lm_new, mask_new = resize_n_crop_img(
+        img,  # 只要这个是Tensor的就行了, 就可以反向传播过去(严格来讲只要这个是就行)
+        lm,   # lm和lm_new只是之后会用作loss
+        t, s, target_size=target_size, mask=mask)
+    trans_params = np.array([w0, h0, s, t[0], t[1]])
+
+    return trans_params, img_new, lm_new, mask_new
+
+
+
+def vis_2dpoints(img, points):
+    # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+    img = np.array(img, dtype=np.uint8)
+    H, W = img.shape[:2]
+    points[:, 1] = H - points[:, 1]
+
+    for p in points:
+        cv2.circle(img, (int(p[0]), int(p[1])), 2, (255, 255, 0), -1)
+    plt.imshow(img)
+    plt.show()
+
+# utils for face reconstruction
+def align_img_tensor(img_tensor, lm, lm3D, mask=None, target_size=224., rescale_factor=102.):
+    """
+    Return:
+        transparams        --numpy.array  (raw_W, raw_H, scale, tx, ty)
+        img_new            --PIL.Image  (target_size, target_size, 3)
+        lm_new             --numpy.array  (68, 2), y direction is opposite to v direction
+        mask_new           --PIL.Image  (target_size, target_size)
+
+    Parameters:
+        img                --PIL.Image  (raw_H, raw_W, 3)
+        lm                 --numpy.array  (68, 2), y direction is opposite to v direction
+        lm3D               --numpy.array  (5, 3)
+        mask               --PIL.Image  (raw_H, raw_W, 3)
+    """
+
+    # 这里的img是img_tensor
+    # vis_img_np = np.array(img_tensor.detach().cpu(), dtype=np.uint8).copy()  # 这里将tensor转为np的格式, 这里只是得到对其的信息的, 无所谓反向传播, 这里加了copy才能使用可视化
+    # vis_2dpoints(vis_img_np, lm)
+    h0, w0 = img_tensor.shape[:2]
+
+    if lm.shape[0] != 5:
+        lm5p = extract_5p(lm)
+    else:
+        lm5p = lm
+
+    # calculate translation and scale factors using 5 facial landmarks and standard landmarks of a 3D face
+    t, s = POS(lm5p.transpose(), lm3D.transpose())
+    s = rescale_factor / s
+
+    # processing the image
+    img_new, lm_new, mask_new = resize_n_crop_img_tensor(
+        img_tensor,  # 只要这个是Tensor的就行了, 就可以反向传播过去(严格来讲只要这个是就行)
+        lm,  # lm和lm_new只是之后会用作loss, 所以lm无所谓
+        t, s, target_size=target_size, mask=mask)
     trans_params = np.array([w0, h0, s, t[0], t[1]])
 
     return trans_params, img_new, lm_new, mask_new

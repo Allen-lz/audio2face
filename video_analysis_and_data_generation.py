@@ -191,6 +191,10 @@ class FaceProcess():
     def __run__(self, video_file):
         videogen, video_profile_info = self.makevideo(video_file)
         face_images = []
+
+        face_lm_images = []
+
+
         kps_list = []
 
         for img_RGB in tqdm.tqdm(videogen):
@@ -203,22 +207,24 @@ class FaceProcess():
             face_image = img_RGB[y1:y2, x1:x2, :]
 
             face_image = cv2.resize(face_image, (self.size, self.size))
+            face_images.append(face_image)
 
             # 保存关键点
             kps = self.fa.__run__(face_image)
             kps_list.append(kps[np.newaxis, :, :])
 
             # 绘制图像
-            face_image = np.zeros(face_image.shape)
-            face_image = self.fa.drawFace(kps, face_image)
-            face_images.append(face_image)
+            face_lm_image = np.zeros(face_image.shape)
+            face_lm_image = self.fa.drawFace(kps, face_lm_image)
+            face_lm_images.append(face_lm_image)
 
         kps_np = np.concatenate(kps_list, axis=0)
-        return face_images, video_profile_info, kps_np
+        return face_images, face_lm_images, video_profile_info, kps_np
 
-    def detect_facelandmark(self, img_rgb):
+    def detect_facelandmark(self, img_rgb, return_bbox=False):
 
         face_bbox = self.face_mask_google_mediapipe(self.face_detection, img_rgb)
+
 
         x1, y1, x2, y2 = face_bbox
         h, w = img_rgb.shape[:2]
@@ -229,6 +235,9 @@ class FaceProcess():
 
         # 保存关键点
         lm = self.fa.__run__(face_img)
+
+        if return_bbox:
+            return lm, face_img, [x1, y1, x2, y2]
 
         return lm, face_img
 
@@ -270,7 +279,7 @@ class FaceProcess():
         if len(face_bbox) > 0:
             return face_bbox[0]
         else:
-            return []
+            return [0, 0, w, h]  # 因为训练集里面的人脸都是crop出来的, 就没有必要再检测了
 
 
     def bbox_expansion_rate(self, x1, y1, x2, y2, h, w, rate):
@@ -341,6 +350,10 @@ if __name__ == "__main__":
     if not os.path.exists(generate_lm_dir):
         os.makedirs(generate_lm_dir)
 
+    generate_face_dir = "generate_face"
+    if not os.path.exists(generate_face_dir):
+        os.makedirs(generate_face_dir)
+
     generate_audio_dir = "generate_audio"
     if not os.path.exists(generate_audio_dir):
         os.makedirs(generate_audio_dir)
@@ -362,13 +375,23 @@ if __name__ == "__main__":
         if not os.path.exists(sub_generate_lm_dir):
             os.makedirs(sub_generate_lm_dir)
 
+        sub_generate_face_dir = os.path.join(generate_face_dir, prefix)
+        if not os.path.exists(sub_generate_face_dir):
+            os.makedirs(sub_generate_face_dir)
+
         # 得到关键点的数据
-        face_images, video_profile_info, kps_np = face_process.__run__(video_path)
-        for i, image in enumerate(face_images):
-            dst_img_path = os.path.join(sub_generate_lm_dir, str(i).zfill(6) + "_" + prefix + ".png")
-            image = np.array(image, dtype=np.uint8)
+        face_images, face_lm_images, video_profile_info, kps_np = face_process.__run__(video_path)
+        for i, _ in enumerate(face_images):
+            dst_img_path = os.path.join(sub_generate_face_dir, str(i).zfill(6) + "_" + prefix + ".png")
+            image = np.array(face_images[i], dtype=np.uint8)
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
             cv2.imwrite(dst_img_path, image)
+
+            dst_lm_path = os.path.join(sub_generate_lm_dir, str(i).zfill(6) + "_" + prefix + ".png")
+            lm_image = np.array(face_lm_images[i], dtype=np.uint8)
+            lm_image = cv2.cvtColor(lm_image, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(dst_lm_path, lm_image)
+
         kps_np_file = os.path.join(generate_lm_np_dir, prefix + ".npy")
         np.save(kps_np_file, kps_np.astype(np.float32), allow_pickle=False)
 

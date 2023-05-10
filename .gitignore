@@ -8,3 +8,5 @@ generate_wavs/
 *.ckpt
 *.pt
 *.pth
+generate_*/
+models/_3dmm/BFM/*

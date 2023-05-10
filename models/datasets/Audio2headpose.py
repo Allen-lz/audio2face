@@ -1,3 +1,11 @@
+"""
+这个是由音频到头部姿态的数据加载脚本
+
+1. gt是当前帧的head pose与第一帧的差值
+2. 这个的T也是18帧
+"""
+
+
 import torch
 import torch.utils.data as data
 import numpy as np
@@ -7,6 +15,10 @@ import sys
 sys.path.append(".")
 from models.utils.landmark_normal import norm_input_face
 import matplotlib.pyplot as plt
+import cv2
+
+
+from models._3dmm.inference_3dmm import FaceRecon
 
 def close_input_face_mouth(shape_3d, p1=0.7, p2=0.5):
     """
@@ -67,9 +79,20 @@ def std_mean_calculation(au_data_list):
 
     return au_mean, au_std
 
-class Audio2landmark_Dataset(data.Dataset):
-
+class Audio2headpose_Dataset(data.Dataset):
     def __init__(self, num_window_frames, num_emb_window_frames, num_size):
+        """
+        加载每个子文件夹下的所有图片并使用face_recon得到每张图片的pose
+
+        取出第一帧为β0, 然后使用当前帧的β与第一帧的做个差
+
+
+
+        Args:
+            num_window_frames:
+            num_emb_window_frames:
+            num_size:
+        """
         self.num_window_frames = num_window_frames  # 18
         self.num_emb_window_frames = num_emb_window_frames  # 18
         self.num_size = num_size
@@ -77,9 +100,19 @@ class Audio2landmark_Dataset(data.Dataset):
         self.au_data_dir = "generate_audio"
         self.fl_data_dir = "generate_lm_np"
 
+        # update
+        self.face_data_dir = "generate_face"
+        self.face_coeff_dir = "generate_face_coeff"
+        self.face_recon = FaceRecon("models/_3dmm/BFM/epoch_20.pth",
+                                    "models/_3dmm/BFM")
+
         self.au_data_list = []
         self.fl_data_list = []
         self.fl_std_list = []
+
+        # update
+        self.face_coeff_list = []
+        self.face_coeff_std_list = []
 
         for file_name in os.listdir(self.au_data_dir):
             with open(os.path.join(self.au_data_dir, file_name), 'rb') as fp:
@@ -97,8 +130,47 @@ class Audio2landmark_Dataset(data.Dataset):
                     fl_reshape_data.append(fl_data[i].reshape(1, 204))
                     fl_std_reshape_data.append(fl_std)
 
+                # 这里是append不同的视频段
                 self.fl_data_list.append(np.concatenate(fl_reshape_data, axis=0))
                 self.fl_std_list.append(np.concatenate(fl_std_reshape_data, axis=0))
+
+        # ================================== update ==================================
+        for dir_name in os.listdir(self.face_data_dir):
+            cur_coeff_dir_path = os.path.join(self.face_coeff_dir, dir_name)
+            if not os.path.exists(cur_coeff_dir_path):
+                os.makedirs(cur_coeff_dir_path)
+
+            cur_dir_path = os.path.join(self.face_data_dir, dir_name)  # subdir
+            cur_image_list = os.listdir(cur_dir_path)  # subdir中的图片
+
+            cur_dir_coeff_list = []
+            cur_dir_first_coeff_list = []
+            for i, cur_image in enumerate(cur_image_list):
+                # 在进行推理之前先要判断一下这张图片是否已经被推理过了
+                coeff_file = os.path.join(cur_coeff_dir_path, os.path.splitext(cur_image)[0] + ".npy")
+                if os.path.exists(coeff_file):
+                    # 这个face_coeff可以直接拿出来, 就能直接append到cur_dir_coeff_list上去
+                    face_coeff = np.load(coeff_file)
+                else:
+                    cur_image_path = os.path.join(self.face_data_dir, dir_name, cur_image)
+                    cur_image = cv2.imread(cur_image_path)
+                    cur_face_coeff = self.face_recon.run(cur_image)
+                    angle = cur_face_coeff["angle"]
+                    s = np.array([[cur_face_coeff["trans_params"][0]]])
+                    face_coeff = np.concatenate([angle, s], axis=-1)
+                    np.save(coeff_file, face_coeff)
+
+                cur_dir_coeff_list.append(face_coeff)
+                # 一直append第一帧的系数
+                cur_dir_first_coeff_list.append(cur_dir_coeff_list[0])
+
+            cur_dir_coeff_list = np.concatenate(cur_dir_coeff_list, axis=0)
+            cur_dir_first_coeff_list = np.concatenate(cur_dir_first_coeff_list, axis=0)
+
+            self.face_coeff_list.append(cur_dir_coeff_list)
+            self.face_coeff_std_list.append(cur_dir_first_coeff_list)
+        # ============================================================================
+
 
         valid_idx = list(range(len(self.au_data_list)))
 
@@ -128,7 +200,7 @@ class Audio2landmark_Dataset(data.Dataset):
         Returns:
         """
         # print('-> get item {}: {} {}'.format(item, self.fl_data[item][1][0], self.fl_data[item][1][1]))
-        return self.fl_data_list[item], self.au_data_list[item], self.fl_std_list[item]
+        return self.fl_data_list[item], self.au_data_list[item], self.fl_std_list[item], self.face_coeff_list[item], self.face_coeff_std_list[item]
 
     def my_collate_in_segments(self, batch):
         """
@@ -141,22 +213,25 @@ class Audio2landmark_Dataset(data.Dataset):
 
         """
 
-        fls, aus, emb_aus, std = [], [], [], []
+        fls, aus, emb_aus, std, fc, fc_std = [], [], [], [], [], []
         per_num = self.num_size // len(batch)
-        for fl_data, au_data, std_data in batch:
+        for fl_data, au_data, std_data, fc_data, fc_std_data in batch:
             """
             对于某段音频, 都随机截取N / len(batch)个窗口
             """
 
             assert (fl_data.shape[0] == au_data.shape[0])
 
-            fl_data = torch.tensor(fl_data, dtype=torch.float, requires_grad=False)
-            au_data = torch.tensor(au_data, dtype=torch.float, requires_grad=False)
-            std_data = torch.tensor(std_data, dtype=torch.float, requires_grad=False)
+            fl_data = torch.tensor(fl_data, dtype=torch.float, requires_grad=False)    # torch.Size([2860, 204])
+            au_data = torch.tensor(au_data, dtype=torch.float, requires_grad=False)    # torch.Size([2860, 80])
+            std_data = torch.tensor(std_data, dtype=torch.float, requires_grad=False)  # torch.Size([2860, 204])
 
+            fc_data = torch.tensor(fc_data, dtype=torch.float, requires_grad=False)
+            fc_std_data = torch.tensor(fc_std_data, dtype=torch.float, requires_grad=False)
 
             for i in range(per_num):
 
+                # 这样抽取数据的方式对一开始的效果不友好, 一开始肯定是要用第一帧疯狂进行padding, 所以这里要随机的是right而不是left
                 left = random.randint(0, fl_data.shape[0] - self.num_window_frames)
 
                 # window shift data
@@ -164,8 +239,12 @@ class Audio2landmark_Dataset(data.Dataset):
                 aus += [au_data[left:left + self.num_window_frames]]
                 std += [std_data[left:left + self.num_window_frames]]
 
+                # update
+                fc += [fc_data[left:left + self.num_window_frames]]
+                fc_std += [fc_std_data[left:left + self.num_window_frames]]
+
                 # au emb
-                # 并同步得到计算emb的aus, left + self.num_window_frames依旧是分段音频的终点
+                # 并同步得到计算emb的aus, left + self.num_window_frames依旧是分段音频的终点, 从上面音频的边界往前数, 前面不够了就填充
                 if left + self.num_window_frames - self.num_emb_window_frames >= 0:
                     emb_aus += [au_data[left + self.num_window_frames - self.num_emb_window_frames:left + self.num_window_frames]]
                 else:
@@ -178,10 +257,12 @@ class Audio2landmark_Dataset(data.Dataset):
         aus = torch.stack(aus, dim=0)
         emb_aus = torch.stack(emb_aus, dim=0)
         std = torch.stack(std, dim=0)
-        return fls, aus, emb_aus, std
+        fc = torch.stack(fc, dim=0)
+        fc_std = torch.stack(fc_std, dim=0)
 
+        return fls, aus, emb_aus, std, fc, fc_std
 
-class Audio2landmark_Eval_Dataset(data.Dataset):
+class Audio2headpose_Eval_Dataset(data.Dataset):
     def __init__(self, num_window_frames, num_emb_window_frames, num_size):
         self.num_window_frames = num_window_frames  # 18
         self.num_emb_window_frames = num_emb_window_frames  # 18
@@ -190,9 +271,19 @@ class Audio2landmark_Eval_Dataset(data.Dataset):
         self.au_data_dir = "generate_audio"
         self.fl_data_dir = "generate_lm_np"
 
+        # ============================================ update ================================================
+        self.face_data_dir = "generate_face"
+        self.face_coeff_dir = "generate_face_coeff"
+        self.face_recon = FaceRecon("D:/audio2face/SadTalker/checkpoints/epoch_20.pth",
+                                    "D:/audio2face/SadTalker/checkpoints/BFM_Fitting")
+
         self.au_data_list = []
         self.fl_data_list = []
         self.fl_std_list = []
+
+        # update
+        self.face_coeff_list = []
+        self.face_coeff_std_list = []
 
         for file_name in os.listdir(self.au_data_dir):
             with open(os.path.join(self.au_data_dir, file_name), 'rb') as fp:
@@ -212,6 +303,43 @@ class Audio2landmark_Eval_Dataset(data.Dataset):
 
                 self.fl_data_list.append(np.concatenate(fl_reshape_data, axis=0))
                 self.fl_std_list.append(np.concatenate(fl_std_reshape_data, axis=0))
+
+        # ================================== update ==================================
+        for dir_name in os.listdir(self.face_data_dir):
+            cur_coeff_dir_path = os.path.join(self.face_coeff_dir, dir_name)
+            if not os.path.exists(cur_coeff_dir_path):
+                os.makedirs(cur_coeff_dir_path)
+
+            cur_dir_path = os.path.join(self.face_data_dir, dir_name)  # subdir
+            cur_image_list = os.listdir(cur_dir_path)  # subdir中的图片
+
+            cur_dir_coeff_list = []
+            cur_dir_first_coeff_list = []
+            for i, cur_image in enumerate(cur_image_list):
+                # 在进行推理之前先要判断一下这张图片是否已经被推理过了
+                coeff_file = os.path.join(cur_coeff_dir_path, os.path.splitext(cur_image)[0] + ".npy")
+                if os.path.exists(coeff_file):
+                    # 这个face_coeff可以直接拿出来, 就能直接append到cur_dir_coeff_list上去
+                    face_coeff = np.load(coeff_file)
+                else:
+                    cur_image_path = os.path.join(self.face_data_dir, dir_name, cur_image)
+                    cur_image = cv2.imread(cur_image_path)
+                    cur_face_coeff = self.face_recon.run(cur_image)
+                    angle = cur_face_coeff["angle"]
+                    s = np.array([[cur_face_coeff["trans_params"][0]]])
+                    face_coeff = np.concatenate([angle, s], axis=-1)
+                    np.save(coeff_file, face_coeff)
+
+                cur_dir_coeff_list.append(face_coeff)
+                # 一直append第一帧的系数
+                cur_dir_first_coeff_list.append(cur_dir_coeff_list[0])
+
+            cur_dir_coeff_list = np.concatenate(cur_dir_coeff_list, axis=0)
+            cur_dir_first_coeff_list = np.concatenate(cur_dir_first_coeff_list, axis=0)
+
+            self.face_coeff_list.append(cur_dir_coeff_list)
+            self.face_coeff_std_list.append(cur_dir_first_coeff_list)
+        # ============================================================================
 
         valid_idx = list(range(len(self.au_data_list)))
 
@@ -259,9 +387,9 @@ class Audio2landmark_Eval_Dataset(data.Dataset):
             item:
         Returns:
         """
-        return self.fl_data_list[item], self.au_data_list[item], self.fl_std_list[item], \
+        return self.fl_data_list[item], self.au_data_list[item], self.fl_std_list[item], self.face_coeff_list[item], self.face_coeff_std_list[item], \
                self.data_scale_list[item], self.data_shift_list[item],\
-               self.std_scale_list[item], self.std_shift_list[item]
+               self.std_scale_list[item], self.std_shift_list[item],
 
     def my_collate_in_segments(self, batch):
         """
@@ -274,11 +402,11 @@ class Audio2landmark_Eval_Dataset(data.Dataset):
 
         """
 
-        fls, aus, emb_aus, std = [], [], [], []
+        fls, aus, emb_aus, std, fc, fc_std = [], [], [], [], [], []
         data_scales, data_shifts, std_scales, std_shifts = [], [], [], []
 
         per_num = self.num_size // len(batch)
-        for fl_data, au_data, std_data, fl_scale, fl_shift, std_scale, std_shift in batch:
+        for fl_data, au_data, std_data, fc_data, fc_std_data, fl_scale, fl_shift, std_scale, std_shift in batch:
             """
             对于某段音频, 都随机截取N / len(batch)个窗口
             """
@@ -288,6 +416,9 @@ class Audio2landmark_Eval_Dataset(data.Dataset):
             fl_data = torch.tensor(fl_data, dtype=torch.float, requires_grad=False)
             au_data = torch.tensor(au_data, dtype=torch.float, requires_grad=False)
             std_data = torch.tensor(std_data, dtype=torch.float, requires_grad=False)
+
+            fc_data = torch.tensor(fc_data, dtype=torch.float, requires_grad=False)
+            fc_std_data = torch.tensor(fc_std_data, dtype=torch.float, requires_grad=False)
 
             fl_scale = torch.tensor(fl_scale, dtype=torch.float, requires_grad=False)
             fl_shift = torch.tensor(fl_shift, dtype=torch.float, requires_grad=False)
@@ -303,6 +434,10 @@ class Audio2landmark_Eval_Dataset(data.Dataset):
                 fls += [fl_data[left:left + self.num_window_frames]]
                 aus += [au_data[left:left + self.num_window_frames]]
                 std += [std_data[left:left + self.num_window_frames]]
+
+                # update
+                fc += [fc_data[left:left + self.num_window_frames]]
+                fc_std += [fc_std_data[left:left + self.num_window_frames]]
 
                 # 增加一些归一化的参数
                 data_scales += [fl_scale[left:left + self.num_window_frames]]
@@ -325,30 +460,33 @@ class Audio2landmark_Eval_Dataset(data.Dataset):
         emb_aus = torch.stack(emb_aus, dim=0)
         std = torch.stack(std, dim=0)
 
+        fc = torch.stack(fc, dim=0)
+        fc_std = torch.stack(fc_std, dim=0)
+
         data_scales = torch.stack(data_scales, dim=0)
         data_shifts = torch.stack(data_shifts, dim=0)
 
         std_scales = torch.stack(std_scales, dim=0)
         std_shifts = torch.stack(std_shifts, dim=0)
 
-        return fls, aus, emb_aus, std, data_scales, data_shifts, std_scales, std_shifts
+        return fls, aus, emb_aus, std, fc, fc_std, data_scales, data_shifts, std_scales, std_shifts
 
 
 if __name__ == "__main__":
-    phrase = "train"
+    phrase = "val"
     if phrase == "train":
-        train_data = Audio2landmark_Dataset(num_window_frames=18, num_emb_window_frames=128, num_size=16)
+        train_data = Audio2headpose_Dataset(num_window_frames=18, num_emb_window_frames=128, num_size=16)
         train_dataloader = torch.utils.data.DataLoader(train_data, batch_size=1,  # 这里的batchsize是选取几段wav的意思, 不是通常的那种batchsize
                                                         shuffle=False, num_workers=0,
                                                         collate_fn=train_data.my_collate_in_segments)
 
         for i in range(50000):
             for batch in train_dataloader:
-                fls, aus, emb_aus, std = batch
-                print(fls.shape, aus.shape, emb_aus.shape, std.shape)
+                fls, aus, emb_aus, std, fc, fc_std = batch
+                print(fls.shape, aus.shape, emb_aus.shape, std.shape, fc.shape, fc_std.shape)
 
     else:
-        val_data = Audio2landmark_Eval_Dataset(num_window_frames=18, num_emb_window_frames=128, num_size=16)
+        val_data = Audio2headpose_Eval_Dataset(num_window_frames=18, num_emb_window_frames=128, num_size=16)
         val_dataloader = torch.utils.data.DataLoader(val_data, batch_size=1,
                                                        # 这里的batchsize是选取几段wav的意思, 不是通常的那种batchsize
                                                        shuffle=False, num_workers=0,
@@ -356,6 +494,6 @@ if __name__ == "__main__":
 
         for i in range(50000):
             for batch in val_dataloader:
-                fls, aus, emb_aus, std, data_scales, data_shifts, std_scales, std_shifts = batch
+                fls, aus, emb_aus, std, fc, fc_std, data_scales, data_shifts, std_scales, std_shifts = batch
                 print(data_scales.shape)
                 print(data_shifts.shape)
