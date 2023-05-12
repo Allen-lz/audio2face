@@ -3,6 +3,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from models.networks.expression.exp_module import ApplyExp
+
 
 def fused_leaky_relu(input, bias, negative_slope=0.2, scale=2 ** 0.5):
     return F.leaky_relu(input + bias, negative_slope) * scale
@@ -232,12 +234,43 @@ class EncoderApp(nn.Module):
 
         self.convs.append(EqualConv2d(in_channel, self.w_dim, 4, padding=0, bias=False))
 
-    def forward(self, x):
+
+        ## ================================================================================
+        self.ExpInject2 = ApplyExp(latent_size=52, channels=256)
+        self.ExpInject3 = ApplyExp(latent_size=52, channels=512)
+        self.ExpInject4 = ApplyExp(latent_size=52, channels=512)
+
+    def forward(self, x, exp_latents=None):
 
         res = []
         h = x
-        for conv in self.convs:
+        for i, conv in enumerate(self.convs):
+            """
+            0 torch.Size([1, 64, 256, 256])
+            1 torch.Size([1, 128, 128, 128])
+            2 torch.Size([1, 256, 64, 64])
+            3 torch.Size([1, 512, 32, 32])
+            4 torch.Size([1, 512, 16, 16])
+            5 torch.Size([1, 512, 8, 8])
+            6 torch.Size([1, 512, 4, 4])
+            7 torch.Size([1, 512, 1, 1])  
+            
+            不知道是每个都加还是就加一部分       
+            
+            看来simswap之后, 我觉得2, 3, 4, 5, 6其实都是可以参与的
+            torch.Size([1, 512, 28, 28])
+            torch.Size([1, 512]) 
+            """
             h = conv(h)
+
+            if exp_latents is not None:
+                if i == 2:
+                    h = self.ExpInject2(h, exp_latents)
+                elif i == 3:
+                    h = self.ExpInject3(h, exp_latents)
+                elif i == 4:
+                    h = self.ExpInject4(h, exp_latents)
+
             res.append(h)
 
         return res[-1].squeeze(-1).squeeze(-1), res[::-1][2:]

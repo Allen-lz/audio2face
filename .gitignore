@@ -10,3 +10,4 @@ generate_wavs/
 *.pth
 generate_*/
 models/_3dmm/BFM/*
+*.tar

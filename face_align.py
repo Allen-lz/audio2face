@@ -14,6 +14,11 @@ class Face_Align():
         self.fa = face_alignment.FaceAlignment(face_alignment.LandmarksType._3D, flip_input=False)
 
     def __run__(self, img_rgb):
+
+        plt.imshow(img_rgb)
+        plt.show()
+
+
         preds = self.fa.get_landmarks(img_rgb)[0]
         kps = np.array(preds, dtype=np.int32)
         return kps

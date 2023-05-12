@@ -41,11 +41,14 @@ from models.datasets.Landmark2face_LIA import ImageTranslationDatasetForLIA, vis
 from collections import namedtuple
 from models.networks.mobile_net_v3_small.mbv3_w_euler_score_sep import MobileNet_V3_Small_Euler_Score
 
+from models.networks.face_recognition.arcface import Arcface
+
 import cv2
 import tqdm
 import skvideo.io
 import mediapipe as mp
 from models._3dmm.inference_3dmm import FaceReconBFM
+from models.networks.expression.face_drive import FaceDrive
 import imageio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)-9s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
@@ -80,9 +83,7 @@ parser.add_argument('--img_size', type=int, default=256, help='')
 parser.add_argument('--latent_dim_style', type=int, default=512, help='')
 parser.add_argument('--landmarks_dim', type=int, default=136, help='')
 parser.add_argument('--latent_dim_motion', type=int, default=128, help='')
-
 parser.add_argument('--device', type=str, default="cuda:0", help='')
-
 parser.add_argument('--phrase', type=str, default="train", help='')
 
 opt_parser = parser.parse_args()
@@ -173,6 +174,18 @@ def cal_crop_vgg_loss(img_gen, img_real, margin, loss_func):
     crop_vgg_loss /= (img_real.size(0) - wrong_num + 1e-16)
     return crop_vgg_loss
 
+# conda activate automatic
+# python models/train_landmark2face_LIA.py
+def cosin_metric(x1, x2, weight=100):
+    #return np.dot(x1, x2) / (np.linalg.norm(x1) * np.linalg.norm(x2))
+    x1 = F.normalize(x1, p=2, dim=1)
+    x2 = F.normalize(x2, p=2, dim=1)
+
+    # 计算
+    loss = torch.sum(x1 * x2, dim=1) / (torch.norm(x1, dim=1) * torch.norm(x2, dim=1))
+    loss_G_ID = (1 - loss).mean() * weight
+    return loss_G_ID
+
 
 class FaceLandmarksLoss(nn.Module):
     def __init__(self, device="cuda", model_ckpt=""):
@@ -233,11 +246,17 @@ def train():
     device = torch.device(DEVICE)
 
     # LIA生成模型
-    generator = Generator(IMG_SIZE, LATENT_DIM_STYLE, LANDMARKS_DIM, LATENT_DIM_MOTION, 1)
-
+    generator = Generator(IMG_SIZE, LATENT_DIM_STYLE, LANDMARKS_DIM, LATENT_DIM_MOTION, 1, device=device)
 
     # 创建一个人脸重建的模块
     face_recon = FaceReconBFM()
+
+    # 创建一个人脸表情的提取器
+    # 创建一个面部驱动器
+    faceDrive = FaceDrive(device)
+
+    # 创建一个人脸识别器
+    arcFace = Arcface()
 
     # 预训练checkpoint
     # ckpt_dict = torch.load(pretrained_model)["gen"]
@@ -273,6 +292,12 @@ def train():
     # 损失函数、优化器
     l1_loss_func = torch.nn.L1Loss(reduction="none")
     mse_loss_func = torch.nn.MSELoss(reduction="none")
+
+    # exp loss
+    exp_loss_func = cosin_metric
+
+    # id loss
+    id_loss_func = cosin_metric
 
     vgg_loss_func = VGGLoss().to(device)
     landmarks_loss_func = FaceLandmarksLoss(DEVICE, landmark_ckpt)
@@ -311,7 +336,33 @@ def train():
             requires_grad(generator, True)
             requires_grad(discriminator, False)
 
-            img_target_recon = generator(img_source, fl_target)
+            # 使用面部驱动器得到exp_latents, 然后将latent送入到encoder中
+            # 这里的输入暂时使用source代替
+            # ============================================================================
+            face_drive_ref = img_source / 2 + 0.5
+            exp_ref_latents = faceDrive.run_batch(face_drive_ref)  # (b, 52)
+            # ============================================================================
+
+
+            img_target_recon = generator(img_source, fl_target, exp_ref_latents)
+
+
+            # ============================================================================
+            face_drive_recon = img_target_recon / 2 + 0.5
+            exp_recon_latents = faceDrive.run_batch(face_drive_recon)  # (b, 52)
+            # ============================================================================
+            exp_loss = exp_loss_func(exp_ref_latents, exp_recon_latents)
+
+            # =============================== id loss的计算 ================================
+
+            id_source_img = img_source / 2 + 0.5
+            id_recon_img = img_target_recon / 2 + 0.5
+            source_id = arcFace.run(id_source_img)
+            target_id = arcFace.run(id_recon_img)
+            id_loss = id_loss_func(source_id, target_id)
+
+            # ==============================================================================
+
             img_recon_pred = discriminator(img_target_recon)
 
             l1_loss = (l1_loss_func(img_target_recon, img_target) * image_weight).sum() / image_weight.sum()
@@ -320,26 +371,27 @@ def train():
             crop_vgg_loss = cal_crop_vgg_loss(img_target_recon, img_target, _margin, vgg_loss_func)
             gan_g_loss = g_nonsaturating_loss(img_recon_pred) * GAN_G_LOSS_WEIGHT  # 这是一个愚弄loss
 
-            # 增加一个loss, 使用重建出来的几千个点来做loss, 我认为这个loss应该放在g_loss上
-            # img_target_recon
-            # img_target
-            face_proj_recon = (img_target_recon / 2 + 0.5) * 255
-            face_proj_target = (img_target / 2 + 0.5) * 255
-            # tensor rgb ---> tensor bgr
-            face_proj_recon = face_proj_recon[:, [2, 1, 0], :, ]
-            face_proj_target = face_proj_target[:, [2, 1, 0], :, ]
+            # ========================= 增加一个loss, 使用重建出来的几千个点来做loss, 我认为这个loss应该放在g_loss上 ========================
 
-            recon_proj_vex = face_recon.run_tensor(face_proj_recon.permute(0, 2, 3, 1)) / 224  # 因为人脸重建的输入的尺度就是224, 是固定的
-            target_proj_vex = face_recon.run_tensor(face_proj_target.permute(0, 2, 3, 1)) / 224
+            # face_proj_recon = (img_target_recon / 2 + 0.5) * 255
+            # face_proj_target = (img_target / 2 + 0.5) * 255
+            # # tensor rgb ---> tensor bgr
+            # face_proj_recon = face_proj_recon[:, [2, 1, 0], :, ]
+            # face_proj_target = face_proj_target[:, [2, 1, 0], :, ]
+            #
+            # recon_proj_vex = face_recon.run_tensor(face_proj_recon.permute(0, 2, 3, 1)) / 224  # 因为人脸重建的输入的尺度就是224, 是固定的
+            # target_proj_vex = face_recon.run_tensor(face_proj_target.permute(0, 2, 3, 1)) / 224
+            # vex_l1_loss = l1_loss_func(recon_proj_vex, target_proj_vex)
+            # vex_mse_loss = mse_loss_func(recon_proj_vex, target_proj_vex)
+            #
+            # vex_l1_loss = vex_l1_loss.mean(-1).sum(-1).mean(0)
+            # vex_mse_loss = vex_mse_loss.mean(-1).sum(-1).mean(0)
+            #
+            # recon_vex_loss = (vex_l1_loss + vex_mse_loss) / 2
 
+            recon_vex_loss = torch.FloatTensor([0]).to(device)[0]  # 不使用人脸重建的损失
 
-            vex_l1_loss = l1_loss_func(recon_proj_vex, target_proj_vex)
-            vex_mse_loss = mse_loss_func(recon_proj_vex, target_proj_vex)
-
-            vex_l1_loss = vex_l1_loss.mean(-1).sum(-1).mean(0)
-            vex_mse_loss = vex_mse_loss.mean(-1).sum(-1).mean(0)
-
-            recon_vex_loss = (vex_l1_loss + vex_mse_loss) / 2
+            recon_vex_loss = id_loss
 
             # =========================================================================================================
             # vis_face_proj_recon = np.array(face_proj_recon[0].permute(1, 2, 0).detach().cpu(), dtype=np.uint8)
@@ -423,6 +475,9 @@ def test():
     num_frames = 1500
     device = torch.device("cuda")
 
+    # 创建一个面部驱动器, 得到表情参考的exp_latents
+    faceDrive = FaceDrive(device)
+
     # i2i模型
     model = Generator(256, 512, 136, 128, 1, device=device)
 
@@ -504,7 +559,13 @@ def test():
         img_source = torch.from_numpy(
             (src_img.astype(np.float32).transpose((2, 0, 1))[np.newaxis] / 255.0 - 0.5) * 2.).to(device)
         # img_source = torch.from_numpy(src_img.astype(np.float32).transpose((2, 0, 1))[np.newaxis] / 255.0).to(device)
-        wa, feats = model.enc(img_source)
+
+        # ========================= 对source img进行反解码 =======================
+        face_drive_ref = img_source / 2 + 0.5
+        exp_ref_latents = faceDrive.run_batch(face_drive_ref)  # (b ,52)
+        # =======================================================================
+
+        wa, feats = model.enc(img_source, exp_ref_latents)
 
         # wa是最后一层的特征
         # feats: 是前面几层的特征
@@ -527,6 +588,7 @@ def test():
                     continue
 
                 fl_target = torch.from_numpy(face_landmarks[:, :2].reshape(-1)).unsqueeze(0).float().to(device)
+
 
                 model_out = model.decode(wa, feats, fl_target)[0]
                 gen_img = ((model_out.clamp(-1, 1).permute(1, 2, 0).cpu().numpy() / 2 + 0.5) * 255).astype(
@@ -574,6 +636,8 @@ def test():
 
 
 if __name__ == '__main__':
+    print("opt_parser.phrase", opt_parser.phrase)
+
     if opt_parser.phrase == "test":
         test()
     else:

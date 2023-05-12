@@ -2,7 +2,6 @@ from torch import nn
 from .encoder import EncoderApp, EqualLinear
 from .styledecoder import Synthesis
 
-
 # class Generator(nn.Module):
 #     def __init__(self, size, style_dim=512, motion_dim=20, channel_multiplier=1, blur_kernel=[1, 3, 3, 1]):
 #         super(Generator, self).__init__()
@@ -27,6 +26,10 @@ from .styledecoder import Synthesis
 
 
 class Generator(nn.Module):
+    """
+    其实这个是LIA总网络，包含了encoder和decoder
+    需要将Exp加在encoder中
+    """
     def __init__(self, size, style_dim=512, landmarks_dim=204, motion_dim=20, channel_multiplier=1,
                  blur_kernel=[1, 3, 3, 1], device=None):
         super(Generator, self).__init__()
@@ -55,14 +58,15 @@ class Generator(nn.Module):
         img_recon = self.dec(wa, [h_motion_target], feats)
         return img_recon
 
-    def forward(self, img_source, landmarks_target):
+    def forward(self, img_source, landmarks_target, exp_latents=None):
         """
-        img_source: 用于驱动的原图
+        img_source: 被用于驱动的原图
         landmarks_target: driving face landmark  (batch, 136)
         """
         # wa, alpha, feats = self.enc(img_source, img_drive)
         # image encoding
-        wa, feats = self.enc(img_source)  # wa.shape = (batch, 512)
+
+        wa, feats = self.enc(img_source, exp_latents)  # wa.shape = (batch, 512)
         """
         feats_i(shape):
             torch.Size([2, 512, 8, 8])
