@@ -214,7 +214,7 @@ def train_audio2landmark(device):
         proj_dim=opt_parser.proj_dim,
         drop_out=opt_parser.cvae_drop_out
     ).to(device)
-    headpose_cvae.load_weight(opt_parser.vea_weight)
+    # headpose_cvae.load_weight(opt_parser.vea_weight)
 
     G = Audio2landmark_speaker_aware().to(device)
 
@@ -365,5 +365,5 @@ def train_pose_cvae(device):
 
 if __name__ == "__main__":
     device = "cuda"
-    # train_pose_cvae(device)
-    train_audio2landmark(device)
+    train_pose_cvae(device)
+    # train_audio2landmark(device)

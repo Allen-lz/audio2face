@@ -72,8 +72,14 @@ parser.add_argument('--ckpt_save_dir', type=str, default="checkpoints/landmark2f
 # dataset save
 # /data/xujiajian/dataset/face_images_eval_3
 # /data/xujiajian/dataset/face_images_3
-parser.add_argument('--train_data_dir', type=str, default="D:/datasets/audio2face/face_images_5", help='')
+# /data/xujiajian/dataset/face_images_5/
+# D:/datasets/audio2face/face_images_5
+parser.add_argument('--train_data_dir', type=str, default="/home/luzeng/datasets/audio2face/face_images_5", help='')
 parser.add_argument('--eval_data_dir', type=str, default="/data/xujiajian/dataset/face_images_eval_3", help='')
+
+# /home/luzeng/datasets/expressions/
+# D:/datasets/ARKit/zhf_1/img
+parser.add_argument('--train_exp_data_dir', type=str, default="/home/luzeng/datasets/expressions", help='')
 
 parser.add_argument('--pretrained_model', type=str, default="checkpoints/model.pt", help='')
 parser.add_argument('--discriminator_ckpt', type=str, default="checkpoints/discriminator.pt", help='')
@@ -120,14 +126,15 @@ class ImageSaver:
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
 
-    def save(self, src_img, gen_img, dst_img, epoch=0, global_step=0):
+    def save(self, src_img, gen_img, dst_img, img_exp_ref, epoch=0, global_step=0):
         if (self.last_save_epoch == -1 or epoch >= (self.last_save_epoch + self.dump_epoch_interval)) \
                 and random.random() < 0.01:
             src_img_np = src_img[0].cpu().detach().numpy().transpose((1, 2, 0))
             gen_img_np = gen_img[0].cpu().detach().numpy().transpose((1, 2, 0))
             dst_img_np = dst_img[0].cpu().detach().numpy().transpose((1, 2, 0))
+            img_exp_ref_np = (img_exp_ref[0].cpu().detach().numpy().transpose((1, 2, 0)) - 0.5) * 2
 
-            save_img = np.concatenate([src_img_np, gen_img_np, dst_img_np], axis=1)
+            save_img = np.concatenate([src_img_np, gen_img_np, dst_img_np, img_exp_ref_np], axis=1)
 
             save_img[save_img < -1] = -1
             save_img[save_img > 1] = 1
@@ -178,8 +185,8 @@ def cal_crop_vgg_loss(img_gen, img_real, margin, loss_func):
 # python models/train_landmark2face_LIA.py
 def cosin_metric(x1, x2, weight=100):
     #return np.dot(x1, x2) / (np.linalg.norm(x1) * np.linalg.norm(x2))
-    x1 = F.normalize(x1, p=2, dim=1)
-    x2 = F.normalize(x2, p=2, dim=1)
+    # x1 = F.normalize(x1, p=2, dim=1)
+    # x2 = F.normalize(x2, p=2, dim=1)
 
     # 计算
     loss = torch.sum(x1 * x2, dim=1) / (torch.norm(x1, dim=1) * torch.norm(x2, dim=1))
@@ -225,6 +232,8 @@ def train():
 
     train_data_dir = opt_parser.train_data_dir
 
+    train_exp_data_dir = opt_parser.train_exp_data_dir   # <<<< 增加了一个表情参考图片数据
+
     pretrained_model = opt_parser.pretrained_model
     discriminator_ckpt = opt_parser.discriminator_ckpt
     landmark_ckpt = opt_parser.landmark_ckpt
@@ -249,7 +258,7 @@ def train():
     generator = Generator(IMG_SIZE, LATENT_DIM_STYLE, LANDMARKS_DIM, LATENT_DIM_MOTION, 1, device=device)
 
     # 创建一个人脸重建的模块
-    face_recon = FaceReconBFM()
+    # face_recon = FaceReconBFM()
 
     # 创建一个人脸表情的提取器
     # 创建一个面部驱动器
@@ -281,7 +290,7 @@ def train():
     # 数据集
     # train_dataset = ImageTranslationDatasetForLIA(
     #     train_data_dir, max_num_per_video=MAX_NUM_PER_VIDEO, img_size=(IMG_SIZE, IMG_SIZE), noise_prob=0.)
-    train_dataset = ImageTranslationDatasetForLIA(train_data_dir, img_size=(IMG_SIZE, IMG_SIZE), noise_prob=0.)
+    train_dataset = ImageTranslationDatasetForLIA(train_data_dir, train_exp_data_dir, img_size=(IMG_SIZE, IMG_SIZE), noise_prob=0.)
     print("Video Chunks number:", len(train_dataset))
     train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=3)
     # eval_dataset = ImageTranslationDataset3(eval_data_dir, max_num_per_video=MAX_NUM_PER_VIDEO, shrink=shrink,
@@ -324,9 +333,8 @@ def train():
         # 训练集
         generator.train()
         for i, batch in enumerate(train_dataloader):
-            img_source, fl_target, img_target, image_weight, _margin = batch
-            img_source, fl_target, img_target, image_weight = img_source.to(device), fl_target.float().to(device), \
-                                                              img_target.to(device), image_weight.to(device)
+            img_source, fl_target, img_target, image_weight, _margin, _exp_ref = batch
+            img_source, fl_target, img_target, image_weight, img_exp_ref = img_source.to(device), fl_target.float().to(device), img_target.to(device), image_weight.to(device), _exp_ref.to(device)
 
             # ==========================================================================================================
             # 训练生成器
@@ -339,7 +347,7 @@ def train():
             # 使用面部驱动器得到exp_latents, 然后将latent送入到encoder中
             # 这里的输入暂时使用source代替
             # ============================================================================
-            face_drive_ref = img_source / 2 + 0.5
+            face_drive_ref = img_exp_ref / 2 + 0.5
             exp_ref_latents = faceDrive.run_batch(face_drive_ref)  # (b, 52)
             # ============================================================================
 
@@ -363,12 +371,26 @@ def train():
 
             # ==============================================================================
 
-            img_recon_pred = discriminator(img_target_recon)
+            img_recon_pred, img_recon_feats = discriminator(img_target_recon, True)
+            _, real_img_feats = discriminator(img_target, True)
 
-            l1_loss = (l1_loss_func(img_target_recon, img_target) * image_weight).sum() / image_weight.sum()
-            fl_loss = landmarks_loss_func(img_target_recon, img_target) * LANDMARKS_LOSS_WEIGHT
-            vgg_loss = vgg_loss_func(img_target_recon, img_target).mean()
-            crop_vgg_loss = cal_crop_vgg_loss(img_target_recon, img_target, _margin, vgg_loss_func)
+            fm_loss = 0
+            for img_recon_feat, real_img_feat in zip(img_recon_feats, real_img_feats):
+                assert img_recon_feat.shape == real_img_feat.shape
+                fm_loss += l1_loss_func(img_recon_feat, real_img_feat).sum(-1).sum(-1).mean() / 10
+
+            if global_step % 2 == 0:
+                # 这里我亲一色的乘上一个0.1
+                l1_loss = (l1_loss_func(img_target_recon, img_target) * image_weight).sum() / image_weight.sum() * 0.1
+                fl_loss = landmarks_loss_func(img_target_recon, img_target) * LANDMARKS_LOSS_WEIGHT * 0.1
+                vgg_loss = vgg_loss_func(img_target_recon, img_target).mean() * 0.1
+                crop_vgg_loss = cal_crop_vgg_loss(img_target_recon, img_target, _margin, vgg_loss_func) * 0.1
+            else:
+                l1_loss = 0
+                fl_loss = 0
+                vgg_loss = 0
+                crop_vgg_loss = 0
+
             gan_g_loss = g_nonsaturating_loss(img_recon_pred) * GAN_G_LOSS_WEIGHT  # 这是一个愚弄loss
 
             # ========================= 增加一个loss, 使用重建出来的几千个点来做loss, 我认为这个loss应该放在g_loss上 ========================
@@ -389,9 +411,6 @@ def train():
             #
             # recon_vex_loss = (vex_l1_loss + vex_mse_loss) / 2
 
-            recon_vex_loss = torch.FloatTensor([0]).to(device)[0]  # 不使用人脸重建的损失
-
-            recon_vex_loss = id_loss
 
             # =========================================================================================================
             # vis_face_proj_recon = np.array(face_proj_recon[0].permute(1, 2, 0).detach().cpu(), dtype=np.uint8)
@@ -401,7 +420,7 @@ def train():
             # plt.show()
             # =========================================================================================================
 
-            g_loss = vgg_loss + crop_vgg_loss + l1_loss + fl_loss + gan_g_loss + recon_vex_loss
+            g_loss = vgg_loss + crop_vgg_loss + l1_loss + fl_loss + gan_g_loss + exp_loss + id_loss + fm_loss
 
             g_loss.backward()
             optimizer_G.step()
@@ -428,8 +447,11 @@ def train():
 
 
 
+
+
+
             # 保存训练中间结果, 用于快速验证
-            img_saver.save(img_source, img_target_recon, img_target, epoch=ep, global_step=global_step)
+            img_saver.save(img_source, img_target_recon, img_target, img_exp_ref, epoch=ep, global_step=global_step)
 
             if global_step % opt_parser.print_step_freq == 0:
                 # 训练日志记录
@@ -440,14 +462,16 @@ def train():
                 tensorboard_writer.add_scalar("G_Gan", gan_g_loss.cpu().detach().numpy(), global_step=global_step)
                 tensorboard_writer.add_scalar("D_GAN", d_loss.cpu().detach().numpy(), global_step=global_step)
                 tensorboard_writer.add_scalar("Loss", (g_loss + d_loss).cpu().detach().numpy(), global_step=global_step)
-                tensorboard_writer.add_scalar("Vex_Recon", (recon_vex_loss).cpu().detach().numpy(), global_step=global_step)
+                tensorboard_writer.add_scalar("Exp_Loss", (exp_loss).cpu().detach().numpy(), global_step=global_step)
+                tensorboard_writer.add_scalar("Id_Loss", (id_loss).cpu().detach().numpy(), global_step=global_step)
+                tensorboard_writer.add_scalar("FM_Loss", (fm_loss).cpu().detach().numpy(), global_step=global_step)
 
                 for key, val in generator.state_dict().items():
                     if re.search(r"(to_flow\.5)|(to_rgbs\.5)|(convs\.10)|(direction)|(fc)|(enc\.convs\.4)", key):
                         tensorboard_writer.add_histogram(key, val, global_step=global_step)
 
                 logging.info(
-                    "Step: {:}, L1: {:.6f}, VGG: {:.6f}, Crop VGG: {:.6f}, FL: {:.6f}, G_Gan: {:.6f}, D_GAN: {:.6f}, Loss: {:.6f}, Vex_Recon: {:.6f}".format(
+                    "Step: {:}, L1: {:.6f}, VGG: {:.6f}, Crop VGG: {:.6f}, FL: {:.6f}, G_Gan: {:.6f}, D_GAN: {:.6f}, Loss: {:.6f}, Exp_Loss: {:.6f} Id_Loss: {:.6f}, FM_Loss: {:.6f}".format(
                         global_step,
                         l1_loss.detach().cpu().numpy(),
                         vgg_loss.detach().cpu().numpy(),
@@ -456,7 +480,9 @@ def train():
                         gan_g_loss.detach().cpu().numpy(),
                         d_loss.detach().cpu().numpy(),
                         (g_loss + d_loss).detach().cpu().numpy(),
-                        (recon_vex_loss).cpu().detach().numpy()
+                        (exp_loss).cpu().detach().numpy(),
+                        (id_loss).cpu().detach().numpy(),
+                        (fm_loss).cpu().detach().numpy()
                     )
                 )
 
@@ -561,6 +587,7 @@ def test():
         # img_source = torch.from_numpy(src_img.astype(np.float32).transpose((2, 0, 1))[np.newaxis] / 255.0).to(device)
 
         # ========================= 对source img进行反解码 =======================
+        # 在测试的时候最好传入一系列连贯的表情, 这样在表情方面的表现会更加自然
         face_drive_ref = img_source / 2 + 0.5
         exp_ref_latents = faceDrive.run_batch(face_drive_ref)  # (b ,52)
         # =======================================================================

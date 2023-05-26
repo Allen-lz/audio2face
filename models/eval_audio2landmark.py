@@ -164,10 +164,6 @@ def draw_res(fls_gt, fl_dis_pred, face_id, data_scales, data_shifts, std_scales,
         plt.show()
 
 
-
-
-
-
 def eval(device):
     """
     其实这里要先训练C之后再加载训练更好的C来训练G的

@@ -13,7 +13,7 @@ import cv2
 import skimage.io
 import numpy as np
 import torch.utils.data as data
-
+import matplotlib.pyplot as plt
 
 
 def vis_landmark_on_img(img, shape, linewidth=2):
@@ -42,17 +42,20 @@ def vis_landmark_on_img(img, shape, linewidth=2):
     draw_curve(list(range(48, 59)), loop=True, color=(238, 130, 238))  # mouth
     draw_curve(list(range(60, 67)), loop=True, color=(238, 130, 238))
 
-
 class ImageTranslationDatasetForLIA(data.Dataset):
     """
     Online landmark extraction with AWings
     Landmark setting: 98 landmarks
     """
 
-    def __init__(self, data_dir, noise_prob=0.2, img_size=(512, 512)):
+    def __init__(self, data_dir, exp_data_dir, noise_prob=0.2, img_size=(512, 512)):
         super(ImageTranslationDatasetForLIA, self).__init__()
 
         self.data_dir = data_dir
+        self.exp_data_dir = exp_data_dir
+        self.exp_data_images_path = []
+        self.get_all_img(self.exp_data_dir)
+
         self.noise_prob = noise_prob
         self.img_size = img_size
 
@@ -89,6 +92,24 @@ class ImageTranslationDatasetForLIA(data.Dataset):
 
     def __len__(self):
         return len(self.data)
+
+    def get_all_img(self, data_dir):
+        """
+        得到一个文件夹中的所有图片文件
+        Returns:
+        """
+        items = os.listdir(data_dir)
+
+        for item in items:
+            if os.path.isdir(os.path.join(data_dir, item)):
+                dir_path = os.path.join(data_dir, item)
+                self.get_all_img(dir_path)
+            else:
+                suffix = os.path.splitext(item)[-1]
+                if suffix.lower() == ".png" or suffix.lower() == ".jpg" or suffix.lower() == ".jpeg":
+                    image_path = os.path.join(data_dir, item)
+                    self.exp_data_images_path.append(image_path)
+
 
     def __down_face_mask(self, img, fl):
         down_face_mask = np.zeros_like(img)
@@ -136,14 +157,18 @@ class ImageTranslationDatasetForLIA(data.Dataset):
         # 随机抽取2帧, 一帧作为src一帧作为dst
         rand_ind = np.random.randint(len(image_path_list) - 1, size=2)
 
+        rand_exp_ind = np.random.randint(len(self.exp_data_images_path) - 1, size=1)
+
         fl_path = fl_path_list[rand_ind[1]]
         src = skimage.io.imread(image_path_list[rand_ind[0]])
         dst = skimage.io.imread(image_path_list[rand_ind[1]])
+        exp_ref = skimage.io.imread(self.exp_data_images_path[rand_exp_ind[0]])  # numpy RGB
 
         # resize
         ori_size = (src.shape[1], src.shape[0])  # 这里先记录下src原来的大小
         src = cv2.resize(src, self.img_size)
         dst = cv2.resize(dst, self.img_size)
+        exp_ref = cv2.resize(exp_ref, self.img_size)
 
         # dst landmarks, 归一化之后再映射到目标尺度
         fl = np.load(fl_path)
@@ -164,6 +189,11 @@ class ImageTranslationDatasetForLIA(data.Dataset):
 
         _in = (src.astype(np.float32).transpose((2, 0, 1)) / 255.0 - 0.5) * 2.
         _out = (dst.astype(np.float32).transpose((2, 0, 1)) / 255.0 - 0.5) * 2.
+        _exp_ref = exp_ref.astype(np.float32).transpose((2, 0, 1)) / 255.0
+
+
+
+
         _weight = _weight.transpose((2, 0, 1))
 
-        return _in, norm_fl[:, :2].reshape(-1), _out, _weight, np.array(_margin, dtype=np.int16)
+        return _in, norm_fl[:, :2].reshape(-1), _out, _weight, np.array(_margin, dtype=np.int16), _exp_ref

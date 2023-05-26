@@ -23,6 +23,8 @@ class VAE(nn.Module):
         audio_encode, (_, _) = self.audio_content_encoder(aus)
         audio_encode = audio_encode[:, -1, :]  # [batchszie, 256], 这里是取了最后一个算是综合的结果
         c = audio_encode + emb
+
+
         c = self.linear_fusion_proj(c)
 
         # ==============================================
@@ -71,12 +73,27 @@ class Encoder(nn.Module):
 
         self.x_proj = nn.Linear(4, proj_dim)  # pose只有三个参数
         self.MLP = nn.Sequential(nn.Linear(2 * proj_dim, proj_dim),
-                                 nn.Linear(proj_dim, 16),
-                                 nn.Linear(16, proj_dim)
-                                 )
+                                 nn.BatchNorm1d(proj_dim),
+                                 nn.LeakyReLU(0.1),
 
-        self.linear_means = nn.Linear(proj_dim, latent_size)
-        self.linear_log_var = nn.Linear(proj_dim, latent_size)
+                                 nn.Linear(proj_dim, 16),
+                                 nn.BatchNorm1d(16),
+                                 nn.LeakyReLU(0.1),
+
+                                 nn.Linear(16, proj_dim),
+                                 nn.BatchNorm1d(proj_dim),
+                                 nn.LeakyReLU(0.1)
+                                 )
+        self.linear_means = nn.Sequential(
+            nn.Linear(proj_dim, latent_size),
+            nn.BatchNorm1d(latent_size),
+            nn.LeakyReLU(0.1)
+        )
+        self.linear_log_var = nn.Sequential(
+            nn.Linear(proj_dim, latent_size),
+            nn.BatchNorm1d(latent_size),
+            nn.LeakyReLU(0.1)
+        )
 
     def forward(self, x, c):
         # 在对c进行一次映射
@@ -95,8 +112,16 @@ class Decoder(nn.Module):
     def __init__(self, proj_dim=32, latent_size=4):
         super().__init__()
         self.MLP = nn.Sequential(nn.Linear(proj_dim + latent_size, proj_dim),
+                                 nn.BatchNorm1d(proj_dim),
+                                 nn.LeakyReLU(0.1),
+
                                  nn.Linear(proj_dim, proj_dim // 2),
-                                 nn.Linear(proj_dim // 2, 4)
+                                 nn.BatchNorm1d(proj_dim // 2),
+                                 nn.LeakyReLU(0.1),
+
+                                 nn.Linear(proj_dim // 2, 4),
+                                 nn.BatchNorm1d(4),
+                                 nn.LeakyReLU(0.1)
                                  )
 
     def forward(self, z, c):

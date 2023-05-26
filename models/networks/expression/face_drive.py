@@ -44,7 +44,7 @@ class FaceDrive():
         Returns:
 
         """
-        img_rgb_tenor = self.trochResize(img_rgb_tenor)
+        img_rgb_tenor = self.trochResize(img_rgb_tenor)  # resize到224
         img = img_rgb_tenor.to(self.device)
         pre = self.net.forward(img)
         exp = pre[0]

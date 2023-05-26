@@ -240,8 +240,28 @@ class Discriminator(nn.Module):
             EqualLinear(channels[4], 1),
         )
 
-    def forward(self, input):
-        out = self.convs(input)
+    def forward(self, input, return_feats=False):
+
+        # 卷积特征的提取主要在这里, 需要将这里的卷积转换成迭代传播
+        # out = self.convs(input)
+        feats = []
+
+        out = input
+        for i, conv in enumerate(self.convs):
+            """
+            0000 torch.Size([8, 64, 256, 256])
+            0001 torch.Size([8, 128, 128, 128])
+            0002 torch.Size([8, 256, 64, 64])
+            0003 torch.Size([8, 512, 32, 32])
+            0004 torch.Size([8, 512, 16, 16])
+            0005 torch.Size([8, 512, 8, 8])
+            0006 torch.Size([8, 512, 4, 4])
+            """
+            out = conv(out)
+
+            if i == 2 or i == 3 or i == 4:
+                feats.append(out)
+
         batch, channel, height, width = out.shape
 
         group = min(batch, self.stddev_group)
@@ -258,4 +278,7 @@ class Discriminator(nn.Module):
         out = out.view(batch, -1)
         out = self.final_linear(out)
 
-        return out
+        if return_feats:
+            return out, feats
+        else:
+            return out

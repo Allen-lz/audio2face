@@ -31,8 +31,8 @@ class FaceProcess():
         self.fa = Face_Align()
 
         self.size = 336
-
-        self.mel_basis = mel(16000, 640, fmin=90, fmax=7600, n_mels=80).T
+        # n_fft: 是一个比较重要的参数
+        self.mel_basis = mel(16000, n_fft=640, fmin=90, fmax=7600, n_mels=80).T  # (n_fft // 2 + 1)
         self.min_level = np.exp(-100 / 20 * np.log(10))
         self.b, self.a = self.butter_highpass(30, 16000, order=5)
         self.prng = RandomState()
@@ -43,6 +43,57 @@ class FaceProcess():
         b, a = signal.butter(order, normal_cutoff, btype='high', analog=False)
         return b, a
 
+    def pySTFT_debug(self, x, fps=25, frames=2860, sample_rate=16000):
+        """
+        这里是控制最后的长度的
+        可以通过控制hop_length来是的最后出来的数据的shape和帧数是对应的
+
+        f: frame
+        fps: 帧率
+        1s有16000个因素
+        1s有30帧
+        第一帧的图像是对应着第一帧的因素
+        最后一帧的图像是对应着最后一帧的因素
+        Args:
+            x:
+            fft_length: 采样的窗口的长度， 原来的代码中用的是1024(这个和window_length一般是一样的)
+            hop_length: 步长(其实控制帧长度的就是步长)
+
+        Returns:
+        """
+        # 每个segm的起点
+        # 先计算正好没有overlap的情况下(就是音频的一段就是正好属于那一帧, fft_length==win_length==hop_lenght), 需要padding的长度, 然后对原来的音频进行padding
+        # 如果改变的win_length(fft_length需要和win_lenght一样)的大小的话, 其实就只要重新计算一下padding即可
+
+        hop_length = len(x) // frames  # 先计算一个步长(标准步长)  640
+        rest_l = len(x) % frames  # 1536 (所以视频的帧数越长, 余数会越大, 误差也就越大)
+
+        fft_length = sample_rate // fps  # 再得到一个窗口(标准窗口) 这个窗口的就正好可以达到终点hop_length * frames, 可是x中还会有信息len(x) - (hop_length * frames)
+        assert hop_length == fft_length
+
+
+        # 针对这个多余的信息
+        # 1. 再多padding出一个segm(这样会多出一些帧, 但是可以按照自己的意思padding)
+        pad_l = frames - rest_l
+        # fft_length = fft_length + 1
+        fft_length = fft_length
+        hop_length = hop_length + 1
+        x = np.pad(x, int(pad_l // 2), mode='reflect')
+        # 再就是如果还需要有overlap的话, 就是fft_length > hop_length的话, 就在现有的x后面padding这个overlap就行了
+
+        # ===================================================================================================
+
+        shape = (frames, fft_length)  # 2
+
+        strides = x.strides[:-1] + (hop_length * x.strides[-1], x.strides[-1])
+        result = np.lib.stride_tricks.as_strided(x,
+                                                 shape=shape,
+                                                 strides=strides)
+
+        fft_window = get_window('hann', fft_length, fftbins=True)
+        result = np.fft.rfft(fft_window * result, n=fft_length).T
+
+        return np.abs(result)
 
     def pySTFT_v2(self, x, fps=25, frames=2860, sample_rate=16000):
         """
@@ -188,8 +239,8 @@ class FaceProcess():
 
         return np.abs(result)
 
-    def __run__(self, video_file):
-        videogen, video_profile_info = self.makevideo(video_file)
+    def __run__(self, videogen, video_profile_info):
+
         face_images = []
 
         face_lm_images = []
@@ -327,8 +378,14 @@ class FaceProcess():
         # Ddd a little random noise for model roubstness
         wav = y * 0.96 + (self.prng.rand(y.shape[0]) - 0.5) * 1e-06
         # Compute spect
-        D = self.pySTFT_v2(wav, fps=fps, frames=frames, sample_rate=sample_rate).T
+        # D = self.pySTFT_v2(wav, fps=fps, frames=frames, sample_rate=sample_rate).T
+
+        D = self.pySTFT_debug(wav, fps=fps, frames=frames, sample_rate=sample_rate).T
+
         # Convert to mel and normalize
+
+        print(D.shape, self.mel_basis.shape)
+
         D_mel = np.dot(D, self.mel_basis)
         D_db = 20 * np.log10(np.maximum(self.min_level, D_mel)) - 16
         S = np.clip((D_db + 100) / 100, 0, 1)
@@ -379,22 +436,9 @@ if __name__ == "__main__":
         if not os.path.exists(sub_generate_face_dir):
             os.makedirs(sub_generate_face_dir)
 
-        # 得到关键点的数据
-        face_images, face_lm_images, video_profile_info, kps_np = face_process.__run__(video_path)
-        for i, _ in enumerate(face_images):
-            dst_img_path = os.path.join(sub_generate_face_dir, str(i).zfill(6) + "_" + prefix + ".png")
-            image = np.array(face_images[i], dtype=np.uint8)
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(dst_img_path, image)
 
-            dst_lm_path = os.path.join(sub_generate_lm_dir, str(i).zfill(6) + "_" + prefix + ".png")
-            lm_image = np.array(face_lm_images[i], dtype=np.uint8)
-            lm_image = cv2.cvtColor(lm_image, cv2.COLOR_RGB2BGR)
-            cv2.imwrite(dst_lm_path, lm_image)
-
-        kps_np_file = os.path.join(generate_lm_np_dir, prefix + ".npy")
-        np.save(kps_np_file, kps_np.astype(np.float32), allow_pickle=False)
-
+        # 对视频进行解析
+        videogen, video_profile_info = face_process.makevideo(video_path)
 
         # 得到音频数据
         sample_rate = 16000
@@ -403,5 +447,21 @@ if __name__ == "__main__":
         fps = int(video_profile_info['fps'])
         frames = int(video_profile_info['num_frames'])
         audio_data = face_process.audioprocess(dst_wav_file, fps, frames, sample_rate)
+
+        assert False
         audio_file = os.path.join(generate_audio_dir, prefix + ".npy")
         np.save(audio_file, audio_data.astype(np.float32), allow_pickle=False)
+
+        # 得到关键点的数据
+        face_images, face_lm_images, video_profile_info, kps_np = face_process.__run__(videogen, video_profile_info)
+        for i, _ in enumerate(face_images):
+            dst_img_path = os.path.join(sub_generate_face_dir, str(i).zfill(6) + "_" + prefix + ".png")
+            image = np.array(face_images[i], dtype=np.uint8)
+            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(dst_img_path, image)
+            dst_lm_path = os.path.join(sub_generate_lm_dir, str(i).zfill(6) + "_" + prefix + ".png")
+            lm_image = np.array(face_lm_images[i], dtype=np.uint8)
+            lm_image = cv2.cvtColor(lm_image, cv2.COLOR_RGB2BGR)
+            cv2.imwrite(dst_lm_path, lm_image)
+        kps_np_file = os.path.join(generate_lm_np_dir, prefix + ".npy")
+        np.save(kps_np_file, kps_np.astype(np.float32), allow_pickle=False)
