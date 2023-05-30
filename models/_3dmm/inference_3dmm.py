@@ -39,6 +39,8 @@ def compute_rotation(angles):
 
     Parameters:
         angles           -- torch.tensor, size (B, 3), radian
+
+    这里的angle对应的应该是弧度制
     """
 
     batch_size = angles.shape[0]
