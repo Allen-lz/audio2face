@@ -58,7 +58,7 @@ class Generator(nn.Module):
         img_recon = self.dec(wa, [h_motion_target], feats)
         return img_recon
 
-    def forward(self, img_source, landmarks_target, exp_latents=None):
+    def forward(self, img_source, landmarks_target, exp_latents=None, exp_src_latents=None):
         """
         img_source: 被用于驱动的原图
         landmarks_target: driving face landmark  (batch, 136)
@@ -66,7 +66,7 @@ class Generator(nn.Module):
         # wa, alpha, feats = self.enc(img_source, img_drive)
         # image encoding
 
-        wa, feats = self.enc(img_source, exp_latents)  # wa.shape = (batch, 512)
+        wa, feats = self.enc(img_source, exp_latents, exp_src_latents)  # wa.shape = (batch, 512)
         """
         feats_i(shape):
             torch.Size([2, 512, 8, 8])

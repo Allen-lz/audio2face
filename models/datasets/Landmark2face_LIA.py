@@ -189,10 +189,7 @@ class ImageTranslationDatasetForLIA(data.Dataset):
 
         _in = (src.astype(np.float32).transpose((2, 0, 1)) / 255.0 - 0.5) * 2.
         _out = (dst.astype(np.float32).transpose((2, 0, 1)) / 255.0 - 0.5) * 2.
-        _exp_ref = exp_ref.astype(np.float32).transpose((2, 0, 1)) / 255.0
-
-
-
+        _exp_ref = (exp_ref.astype(np.float32).transpose((2, 0, 1)) / 255.0 - 0.5) * 2.
 
         _weight = _weight.transpose((2, 0, 1))
 

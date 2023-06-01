@@ -16,6 +16,11 @@
 - 5.15 将针对表情的FMLoss编写出来, 因为针对表情的监督信息实在是太少了, 所以要加上这个监督信息信息试试, 记住表情是低层的信息。
 
 
+- 5.31 优化一下表情系数注入的逻辑, 不能是光注入target的表情, 要先将source上的表情去除掉
+
+- 6.01 (这个是直接换exp的注入方案了)将ref的运动向量(其实这里是可以使用src ---> ref的表情向量差的, 但是为了对齐landmark的做法就直接使用ref), 使用LIA的正交矩阵进行分解, 重新线性组合得到的运动向量加在之前的landmark向量上丰富这个向量
+
+
 #### generate datasets
 ```
 python video_analysis_and_data_generation.py

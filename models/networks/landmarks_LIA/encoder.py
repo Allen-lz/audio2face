@@ -240,7 +240,7 @@ class EncoderApp(nn.Module):
         self.ExpInject3 = ApplyExp(latent_size=52, channels=512)
         self.ExpInject4 = ApplyExp(latent_size=52, channels=512)
 
-    def forward(self, x, exp_latents=None):
+    def forward(self, x, exp_latents=None, exp_src_latents=None):
 
         res = []
         h = x
@@ -265,11 +265,11 @@ class EncoderApp(nn.Module):
 
             if exp_latents is not None:
                 if i == 2:
-                    h = self.ExpInject2(h, exp_latents)
+                    h = self.ExpInject2(h, exp_latents, exp_src_latents)
                 elif i == 3:
-                    h = self.ExpInject3(h, exp_latents)
+                    h = self.ExpInject3(h, exp_latents, exp_src_latents)
                 elif i == 4:
-                    h = self.ExpInject4(h, exp_latents)
+                    h = self.ExpInject4(h, exp_latents, exp_src_latents)
 
             res.append(h)
 

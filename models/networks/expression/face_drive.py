@@ -5,6 +5,8 @@ sys.path.append("..")
 sys.path.append("../..")
 from models.networks.expression.models.mobilenetv3 import *
 from models.networks.expression.configs import cfg
+import matplotlib.pyplot as plt
+import numpy as np
 import cv2
 import os
 class FaceDrive():
@@ -44,6 +46,13 @@ class FaceDrive():
         Returns:
 
         """
+
+        # =====================================================================================================
+        # vis_img_rgb_tenor = np.array(img_rgb_tenor.cpu().detach().permute(0, 2, 3, 1) * 255, dtype=np.uint8)[0]
+        # plt.imshow(vis_img_rgb_tenor)
+        # plt.show()
+        # =====================================================================================================
+
         img_rgb_tenor = self.trochResize(img_rgb_tenor)  # resize到224
         img = img_rgb_tenor.to(self.device)
         pre = self.net.forward(img)

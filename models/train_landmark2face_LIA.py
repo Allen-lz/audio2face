@@ -74,12 +74,13 @@ parser.add_argument('--ckpt_save_dir', type=str, default="checkpoints/landmark2f
 # /data/xujiajian/dataset/face_images_3
 # /data/xujiajian/dataset/face_images_5/
 # D:/datasets/audio2face/face_images_5
-parser.add_argument('--train_data_dir', type=str, default="/home/luzeng/datasets/audio2face/face_images_5", help='')
+# /home/luzeng/datasets/audio2face/face_images_5
+parser.add_argument('--train_data_dir', type=str, default="D:/datasets/audio2face/face_images_5", help='')
 parser.add_argument('--eval_data_dir', type=str, default="/data/xujiajian/dataset/face_images_eval_3", help='')
 
 # /home/luzeng/datasets/expressions/
 # D:/datasets/ARKit/zhf_1/img
-parser.add_argument('--train_exp_data_dir', type=str, default="/home/luzeng/datasets/expressions", help='')
+parser.add_argument('--train_exp_data_dir', type=str, default="D:/datasets/ARKit/zhf_1/img", help='')
 
 parser.add_argument('--pretrained_model', type=str, default="checkpoints/model.pt", help='')
 parser.add_argument('--discriminator_ckpt', type=str, default="checkpoints/discriminator.pt", help='')
@@ -132,8 +133,7 @@ class ImageSaver:
             src_img_np = src_img[0].cpu().detach().numpy().transpose((1, 2, 0))
             gen_img_np = gen_img[0].cpu().detach().numpy().transpose((1, 2, 0))
             dst_img_np = dst_img[0].cpu().detach().numpy().transpose((1, 2, 0))
-            img_exp_ref_np = (img_exp_ref[0].cpu().detach().numpy().transpose((1, 2, 0)) - 0.5) * 2
-
+            img_exp_ref_np = img_exp_ref[0].cpu().detach().numpy().transpose((1, 2, 0))
             save_img = np.concatenate([src_img_np, gen_img_np, dst_img_np, img_exp_ref_np], axis=1)
 
             save_img[save_img < -1] = -1
@@ -349,10 +349,13 @@ def train():
             # ============================================================================
             face_drive_ref = img_exp_ref / 2 + 0.5
             exp_ref_latents = faceDrive.run_batch(face_drive_ref)  # (b, 52)
+
+            face_drive_src = img_source / 2 + 0.5
+            exp_src_latents = faceDrive.run_batch(face_drive_src)  # (b, 52)
             # ============================================================================
 
 
-            img_target_recon = generator(img_source, fl_target, exp_ref_latents)
+            img_target_recon = generator(img_source, fl_target, exp_ref_latents, exp_src_latents)
 
 
             # ============================================================================
@@ -444,10 +447,6 @@ def train():
             # conda activate automatic
             # python models/train_landmark2face_LIA.py
             # ==========================================================================================================
-
-
-
-
 
 
             # 保存训练中间结果, 用于快速验证
